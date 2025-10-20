@@ -16,16 +16,19 @@ type Styles struct {
 	Box    lipgloss.Style
 	Active lipgloss.Style
 	Status lipgloss.Style
+	Error  lipgloss.Style // NEW: for red bold error lines
 }
 
 func NewStyles() Styles {
-	border := lipgloss.RoundedBorder()
-	return Styles{
-		Title:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
-		Box:    lipgloss.NewStyle().Border(border).Padding(0, 1).MarginRight(1),
-		Active: lipgloss.NewStyle().Border(border).BorderForeground(lipgloss.Color("10")).Padding(0, 1).MarginRight(1),
-		Status: lipgloss.NewStyle().Foreground(lipgloss.Color("8")).MarginTop(1),
-	}
+    border := lipgloss.RoundedBorder()
+    return Styles{
+        Title:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
+        // REMOVE MarginRight(1) from both Box and Active:
+        Box:    lipgloss.NewStyle().Border(border).Padding(0, 1),
+        Active: lipgloss.NewStyle().Border(border).BorderForeground(lipgloss.Color("10")).Padding(0, 1),
+        Status: lipgloss.NewStyle().Foreground(lipgloss.Color("8")).MarginTop(1),
+        Error:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true),
+    }
 }
 
 // ────────────────────────────────
@@ -55,7 +58,17 @@ func (c *ListColumn[T]) SetItems(items []T) {
 }
 
 func (c *ListColumn[T]) SetTitle(title string) { c.title = title }
-func (c *ListColumn[T]) SetWidth(w int)        { if w > 20 { c.width = w - 2 } }
+
+func (c *ListColumn[T]) SetWidth(w int) {
+	// w is the total width the app wants to allocate to the box.
+	// Subtract 4 for border (2) + padding (2) to get interior content width.
+	if w < 4 {
+		c.width = 0
+		return
+	}
+	c.width = w - 4
+}
+
 func (c *ListColumn[T]) SetHeight(h int)       { if h > 5 { c.height = h - 5 } }
 
 func (c *ListColumn[T]) CursorUp() {
@@ -120,5 +133,6 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 	}
 
 	content := strings.Join(lines, "\n")
-	return box.Width(c.width + 2).Render(head + "\n" + content)
+	// IMPORTANT: width = interior content width + 4 (border+padding)
+	return box.Width(c.width + 4).Render(head + "\n" + content)
 }
