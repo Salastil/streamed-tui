@@ -2,6 +2,7 @@ package internal
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -28,7 +29,7 @@ func NewStyles() Styles {
 }
 
 // ────────────────────────────────
-// GENERIC LIST COLUMN
+// GENERIC LIST COLUMN (SCROLLABLE)
 // ────────────────────────────────
 
 type renderer[T any] func(T) string
@@ -37,19 +38,43 @@ type ListColumn[T any] struct {
 	title    string
 	items    []T
 	selected int
+	scroll   int
 	width    int
+	height   int
 	render   renderer[T]
 }
 
 func NewListColumn[T any](title string, r renderer[T]) *ListColumn[T] {
-	return &ListColumn[T]{title: title, render: r, width: 30}
+	return &ListColumn[T]{title: title, render: r, width: 30, height: 20}
 }
 
-func (c *ListColumn[T]) SetItems(items []T) { c.items = items; c.selected = 0 }
+func (c *ListColumn[T]) SetItems(items []T) {
+	c.items = items
+	c.selected = 0
+	c.scroll = 0
+}
+
 func (c *ListColumn[T]) SetTitle(title string) { c.title = title }
-func (c *ListColumn[T]) SetWidth(w int) { if w > 20 { c.width = w - 2 } }
-func (c *ListColumn[T]) CursorUp() { if c.selected > 0 { c.selected-- } }
-func (c *ListColumn[T]) CursorDown() { if c.selected < len(c.items)-1 { c.selected++ } }
+func (c *ListColumn[T]) SetWidth(w int)        { if w > 20 { c.width = w - 2 } }
+func (c *ListColumn[T]) SetHeight(h int)       { if h > 5 { c.height = h - 5 } }
+
+func (c *ListColumn[T]) CursorUp() {
+	if c.selected > 0 {
+		c.selected--
+	}
+	if c.selected < c.scroll {
+		c.scroll = c.selected
+	}
+}
+
+func (c *ListColumn[T]) CursorDown() {
+	if c.selected < len(c.items)-1 {
+		c.selected++
+	}
+	if c.selected >= c.scroll+c.height {
+		c.scroll = c.selected - c.height + 1
+	}
+}
 
 func (c *ListColumn[T]) Selected() (T, bool) {
 	var zero T
@@ -66,17 +91,34 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 	}
 
 	head := styles.Title.Render(c.title)
-	content := ""
-	for i, it := range c.items {
-		cursor := "  "
-		if i == c.selected {
-			cursor = "▸ "
+	lines := []string{}
+
+	if len(c.items) == 0 {
+		lines = append(lines, "(no items)")
+	} else {
+		start := c.scroll
+		end := start + c.height
+		if end > len(c.items) {
+			end = len(c.items)
 		}
-		line := fmt.Sprintf("%s%s", cursor, c.render(it))
-		if len(line) > c.width && c.width > 3 {
-			line = line[:c.width-3] + "…"
+		for i := start; i < end; i++ {
+			cursor := "  "
+			if i == c.selected {
+				cursor = "▸ "
+			}
+			line := fmt.Sprintf("%s%s", cursor, c.render(c.items[i]))
+			if len(line) > c.width && c.width > 3 {
+				line = line[:c.width-3] + "…"
+			}
+			lines = append(lines, line)
 		}
-		content += line + "\n"
 	}
+
+	// Fill remaining lines if fewer than height
+	for len(lines) < c.height {
+		lines = append(lines, "")
+	}
+
+	content := strings.Join(lines, "\n")
 	return box.Width(c.width + 2).Render(head + "\n" + content)
 }

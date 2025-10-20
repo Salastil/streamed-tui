@@ -11,13 +11,13 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-
-	"github.com/Salastil/streamed-tui/internal/api"
 )
 
+//
 // ────────────────────────────────
-// KEY MAP
+// KEY MAP + HELP
 // ────────────────────────────────
+//
 
 type keyMap struct {
 	Up, Down, Left, Right key.Binding
@@ -36,9 +36,39 @@ func defaultKeys() keyMap {
 	}
 }
 
+// implement help.KeyMap interface
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.Left, k.Right, k.Enter, k.Quit}
+}
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.Left, k.Right},
+		{k.Enter, k.Refresh, k.Quit},
+	}
+}
+
+//
+// ────────────────────────────────
+// MESSAGE TYPES
+// ────────────────────────────────
+//
+
+type (
+	sportsLoadedMsg []Sport
+	matchesLoadedMsg struct {
+		Matches []Match
+		Title   string
+	}
+	streamsLoadedMsg []Stream
+	errorMsg         error
+	launchStreamMsg  struct{ URL string }
+)
+
+//
 // ────────────────────────────────
 // MODEL
 // ────────────────────────────────
+//
 
 type focusCol int
 
@@ -49,23 +79,25 @@ const (
 )
 
 type Model struct {
-	apiClient *api.Client
+	apiClient *Client
 
 	styles Styles
 	keys   keyMap
 	help   help.Model
 	focus  focusCol
 
-	sports  *ListColumn[api.Sport]
-	matches *ListColumn[api.Match]
-	streams *ListColumn[api.Stream]
+	sports  *ListColumn[Sport]
+	matches *ListColumn[Match]
+	streams *ListColumn[Stream]
 
 	status string
 }
 
+//
 // ────────────────────────────────
 // APP ENTRYPOINT
 // ────────────────────────────────
+//
 
 func Run() error {
 	p := tea.NewProgram(New(), tea.WithAltScreen())
@@ -74,8 +106,8 @@ func Run() error {
 }
 
 func New() Model {
-	base := api.BaseURLFromEnv()
-	client := api.NewClient(base, 15*time.Second)
+	base := BaseURLFromEnv()
+	client := NewClient(base, 15*time.Second)
 
 	styles := NewStyles()
 	m := Model{
@@ -86,8 +118,8 @@ func New() Model {
 		focus:     focusSports,
 	}
 
-	m.sports = NewListColumn[api.Sport]("Sports", func(s api.Sport) string { return s.Name })
-	m.matches = NewListColumn[api.Match]("Popular Matches", func(mt api.Match) string {
+	m.sports = NewListColumn[Sport]("Sports", func(s Sport) string { return s.Name })
+	m.matches = NewListColumn[Match]("Popular Matches", func(mt Match) string {
 		when := time.UnixMilli(mt.Date).Local().Format("Jan 2 15:04")
 		title := mt.Title
 		if mt.Teams != nil && mt.Teams.Home != nil && mt.Teams.Away != nil {
@@ -95,7 +127,7 @@ func New() Model {
 		}
 		return fmt.Sprintf("%s  %s  (%s)", when, title, mt.Category)
 	})
-	m.streams = NewListColumn[api.Stream]("Streams", func(st api.Stream) string {
+	m.streams = NewListColumn[Stream]("Streams", func(st Stream) string {
 		quality := "SD"
 		if st.HD {
 			quality = "HD"
@@ -111,9 +143,11 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(m.fetchSports(), m.fetchPopularMatches())
 }
 
+//
 // ────────────────────────────────
 // VIEW
 // ────────────────────────────────
+//
 
 func (m Model) View() string {
 	cols := lipgloss.JoinHorizontal(
@@ -126,9 +160,11 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, cols, status, m.help.View(m.keys))
 }
 
+//
 // ────────────────────────────────
 // UPDATE
 // ────────────────────────────────
+//
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -221,9 +257,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+//
 // ────────────────────────────────
 // COMMANDS
 // ────────────────────────────────
+//
 
 func (m Model) fetchSports() tea.Cmd {
 	return func() tea.Msg {
@@ -245,7 +283,7 @@ func (m Model) fetchPopularMatches() tea.Cmd {
 	}
 }
 
-func (m Model) fetchMatchesForSport(s api.Sport) tea.Cmd {
+func (m Model) fetchMatchesForSport(s Sport) tea.Cmd {
 	return func() tea.Msg {
 		matches, err := m.apiClient.GetMatchesBySport(context.Background(), s.ID)
 		if err != nil {
@@ -255,7 +293,7 @@ func (m Model) fetchMatchesForSport(s api.Sport) tea.Cmd {
 	}
 }
 
-func (m Model) fetchStreamsForMatch(mt api.Match) tea.Cmd {
+func (m Model) fetchStreamsForMatch(mt Match) tea.Cmd {
 	return func() tea.Msg {
 		streams, err := m.apiClient.GetStreamsForMatch(context.Background(), mt)
 		if err != nil {
@@ -265,7 +303,7 @@ func (m Model) fetchStreamsForMatch(mt api.Match) tea.Cmd {
 	}
 }
 
-func (m Model) launchMPV(st api.Stream) tea.Cmd {
+func (m Model) launchMPV(st Stream) tea.Cmd {
 	return func() tea.Msg {
 		url := st.EmbedURL
 		if url == "" {
