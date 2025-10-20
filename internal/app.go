@@ -153,13 +153,6 @@ func (m Model) Init() tea.Cmd {
 // VIEW
 // ────────────────────────────────
 //
-func padToHeight(s string, height int) string {
-	lines := strings.Split(s, "\n")
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	return strings.Join(lines[:height], "\n")
-}
 
 func (m Model) dynamicHelp() string {
 	switch m.focus {
@@ -183,23 +176,18 @@ func (m Model) dynamicHelp() string {
 }
 
 func (m Model) View() string {
-	// Copy styles so we can tweak the rightmost margin to 0
-	right := m.styles
-	right.Box = right.Box.MarginRight(0)
-	right.Active = right.Active.MarginRight(0)
-
 	cols := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		m.sports.View(m.styles, m.focus == focusSports),
 		m.matches.View(m.styles, m.focus == focusMatches),
 		m.streams.View(m.styles, m.focus == focusStreams),
 	)
-	cols += " " // one-char right-edge buffer
-		status := m.styles.Status.Render(m.status)
-		if m.lastError != nil {
-			status = m.styles.Error.Render(fmt.Sprintf("⚠️  %v", m.lastError))
-		}
-		return lipgloss.JoinVertical(lipgloss.Left, cols, status, m.dynamicHelp())
+	
+	status := m.styles.Status.Render(m.status)
+	if m.lastError != nil {
+		status = m.styles.Error.Render(fmt.Sprintf("⚠️  %v", m.lastError))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, cols, status, m.dynamicHelp())
 }
 
 //
@@ -211,21 +199,29 @@ func (m Model) View() string {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		total := msg.Width
-		bordersAndPads := 4 // 2 border + 2 padding per column
-
-		// Compute equal thirds, but reserve space for borders/pads
-		colWidth := (total / 3) - (bordersAndPads / 3)
-
-		// Give the rightmost column any leftover width to avoid clipping
-		remainder := total - (colWidth * 3)
-		rightWidth := colWidth + remainder - 1 // leave 1-char breathing room
-
+		// Reserve space for help and status at bottom
 		usableHeight := int(float64(msg.Height) * 0.9)
-
-		m.sports.SetWidth(colWidth)
-		m.matches.SetWidth(colWidth)
-		m.streams.SetWidth(rightWidth)
+		
+		// Use 85% of terminal width to leave breathing room on the right
+		totalAvailableWidth := int(float64(msg.Width) * 0.97)
+		
+		// Each column needs 4 chars for border (2) + padding (2)
+		borderPadding := 4
+		
+		// Calculate width per column
+		// We have 3 columns, each needs borderPadding space
+		totalBorderSpace := borderPadding * 3
+		availableWidth := totalAvailableWidth - totalBorderSpace
+		
+		// Divide available width equally among 3 columns
+		colWidth := availableWidth / 3
+		
+		// Give any remainder to the last column
+		remainder := availableWidth % 3
+		
+		m.sports.SetWidth(colWidth + borderPadding)
+		m.matches.SetWidth(colWidth + borderPadding)
+		m.streams.SetWidth(colWidth + remainder + borderPadding)
 
 		m.sports.SetHeight(usableHeight)
 		m.matches.SetHeight(usableHeight)
