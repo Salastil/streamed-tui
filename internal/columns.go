@@ -20,15 +20,17 @@ type Styles struct {
 }
 
 func NewStyles() Styles {
-    border := lipgloss.RoundedBorder()
-    return Styles{
-        Title:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
-        // REMOVE MarginRight(1) from both Box and Active:
-        Box:    lipgloss.NewStyle().Border(border).Padding(0, 1),
-        Active: lipgloss.NewStyle().Border(border).BorderForeground(lipgloss.Color("10")).Padding(0, 1),
-        Status: lipgloss.NewStyle().Foreground(lipgloss.Color("8")).MarginTop(1),
-        Error:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true),
-    }
+	border := lipgloss.RoundedBorder()
+	return Styles{
+		Title:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
+		Box:    lipgloss.NewStyle().Border(border).Padding(0, 1).MarginRight(1),
+		Active: lipgloss.NewStyle().
+			Border(border).
+			BorderForeground(lipgloss.Color("#FA8072")). // Not pink, its Salmon obviously
+			Padding(0, 1).
+			MarginRight(1),
+		Status: lipgloss.NewStyle().Foreground(lipgloss.Color("8")).MarginTop(1),
+	}
 }
 
 // ────────────────────────────────
@@ -114,17 +116,22 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 		if end > len(c.items) {
 			end = len(c.items)
 		}
-		for i := start; i < end; i++ {
-			cursor := "  "
-			if i == c.selected {
-				cursor = "▸ "
-			}
-			line := fmt.Sprintf("%s%s", cursor, c.render(c.items[i]))
-			if len(line) > c.width && c.width > 3 {
-				line = line[:c.width-3] + "…"
-			}
-			lines = append(lines, line)
+	for i := start; i < end; i++ {
+		cursor := "  "
+		lineText := c.render(c.items[i])
+		if i == c.selected {
+			cursor = "▸ "
+			lineText = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#FA8072")). // Not pink, its Salmon obviously
+				Bold(true).
+				Render(lineText)
 		}
+		line := fmt.Sprintf("%s%s", cursor, lineText)
+		if len(line) > c.width && c.width > 3 {
+			line = line[:c.width-3] + "…"
+		}
+		lines = append(lines, line)
+	}
 	}
 
 	// Fill remaining lines if fewer than height
