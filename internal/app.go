@@ -3,8 +3,6 @@ package internal
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -13,6 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// ────────────────────────────────
+// KEYMAP
+// ────────────────────────────────
 
 type keyMap struct {
 	Up, Down, Left, Right key.Binding
@@ -40,12 +42,17 @@ func defaultKeys() keyMap {
 func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Up, k.Down, k.Left, k.Right, k.Enter, k.OpenBrowser, k.OpenMPV, k.Quit}
 }
+
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right},
 		{k.Enter, k.OpenBrowser, k.OpenMPV, k.Refresh, k.Help, k.Debug, k.Quit},
 	}
 }
+
+// ────────────────────────────────
+// TYPES & CONSTANTS
+// ────────────────────────────────
 
 type (
 	sportsLoadedMsg  []Sport
@@ -74,6 +81,10 @@ const (
 	viewDebug
 )
 
+// ────────────────────────────────
+// MODEL
+// ────────────────────────────────
+
 type Model struct {
 	apiClient   *Client
 	styles      Styles
@@ -91,6 +102,10 @@ type Model struct {
 	debugLines    []string
 	TerminalWidth int
 }
+
+// ────────────────────────────────
+// ENTRY POINT
+// ────────────────────────────────
 
 func Run() error {
 	p := tea.NewProgram(New(), tea.WithAltScreen())
@@ -133,6 +148,10 @@ func New() Model {
 	m.status = fmt.Sprintf("Using API %s | Loading…", base)
 	return m
 }
+
+// ────────────────────────────────
+// VIEW MANAGEMENT
+// ────────────────────────────────
 
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(m.fetchSports(), m.fetchPopularMatches())
@@ -211,6 +230,10 @@ func (m Model) renderDebugPanel() string {
 
 	return panel
 }
+
+// ────────────────────────────────
+// UPDATE LOOP
+// ────────────────────────────────
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -368,6 +391,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ────────────────────────────────
+// FETCHERS
+// ────────────────────────────────
+
 func (m Model) fetchSports() tea.Cmd {
 	return func() tea.Msg {
 		sports, err := m.apiClient.GetSports(context.Background())
@@ -408,32 +435,51 @@ func (m Model) fetchStreamsForMatch(mt Match) tea.Cmd {
 	}
 }
 
+// ────────────────────────────────
+// EXTRACTOR (chromedp integration)
+// ────────────────────────────────
+
 func (m Model) runExtractor(st Stream) tea.Cmd {
 	return func() tea.Msg {
 		if st.EmbedURL == "" {
 			return debugLogMsg("Extractor aborted: empty embed URL")
 		}
-		m3u8, err := extractM3U8Lite(st.EmbedURL, func(line string) {
-			// each extractor log line will flow back to the UI
-			return
+
+		logcb := func(line string) {
+			m.debugLines = append(m.debugLines, line)
+			if len(m.debugLines) > 200 {
+				m.debugLines = m.debugLines[len(m.debugLines)-200:]
+			}
+		}
+
+		logcb(fmt.Sprintf("[extractor] Starting Chrome-based extractor for %s", st.EmbedURL))
+
+		m3u8, hdrs, err := extractM3U8Lite(st.EmbedURL, func(line string) {
+			m.debugLines = append(m.debugLines, line)
 		})
 		if err != nil {
+			logcb(fmt.Sprintf("[extractor] ❌ %v", err))
 			return debugLogMsg(fmt.Sprintf("Extractor failed: %v", err))
 		}
-		cmd := exec.Command("mpv",
-			"--no-terminal",
-			"--really-quiet",
-			fmt.Sprintf("--http-header-fields=User-Agent: %s", "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/144.0"),
-			fmt.Sprintf("--http-header-fields=Origin: %s", "https://embedsports.top"),
-			fmt.Sprintf("--http-header-fields=Referer: %s", "https://embedsports.top/"),
-			m3u8,
-		)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		_ = cmd.Start()
-		return debugLogMsg(fmt.Sprintf("Extractor success, launched MPV: %s", m3u8))
+
+		logcb(fmt.Sprintf("[extractor] ✅ Found M3U8: %s", m3u8))
+		if len(hdrs) > 0 {
+			logcb(fmt.Sprintf("[extractor] Captured %d headers", len(hdrs)))
+		}
+
+		if err := LaunchMPVWithHeaders(m3u8, hdrs, logcb); err != nil {
+			logcb(fmt.Sprintf("[mpv] ❌ %v", err))
+			return debugLogMsg(fmt.Sprintf("MPV error: %v", err))
+		}
+
+		logcb(fmt.Sprintf("[mpv] ▶ Streaming started for %s", st.EmbedURL))
+		return debugLogMsg("Extractor completed successfully")
 	}
 }
+
+// ────────────────────────────────
+// LOG TO UI
+// ────────────────────────────────
 
 func (m Model) logToUI(line string) tea.Cmd {
 	return func() tea.Msg {
