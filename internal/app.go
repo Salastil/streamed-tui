@@ -24,6 +24,7 @@ type keyMap struct {
 	Up, Down, Left, Right key.Binding
 	Enter, Quit, Refresh  key.Binding
 	OpenBrowser, OpenMPV  key.Binding
+	Help, Debug           key.Binding
 }
 
 func defaultKeys() keyMap {
@@ -37,17 +38,18 @@ func defaultKeys() keyMap {
 		OpenMPV:     key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "open in mpv")),
 		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		Help:        key.NewBinding(key.WithKeys("f1", "?"), key.WithHelp("F1/?", "toggle help")),
+		Debug:       key.NewBinding(key.WithKeys("f12"), key.WithHelp("F12", "debug panel")),
 	}
 }
 
-// implement help.KeyMap interface
 func (k keyMap) ShortHelp() []key.Binding {
 	return []key.Binding{k.Up, k.Down, k.Left, k.Right, k.Enter, k.OpenBrowser, k.OpenMPV, k.Quit}
 }
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right},
-		{k.Enter, k.OpenBrowser, k.OpenMPV, k.Refresh, k.Quit},
+		{k.Enter, k.OpenBrowser, k.OpenMPV, k.Refresh, k.Help, k.Debug, k.Quit},
 	}
 }
 
@@ -75,6 +77,7 @@ type (
 //
 
 type focusCol int
+type viewMode int
 
 const (
 	focusSports focusCol = iota
@@ -82,20 +85,29 @@ const (
 	focusStreams
 )
 
+const (
+	viewMain viewMode = iota
+	viewHelp
+	viewDebug
+)
+
 type Model struct {
 	apiClient *Client
 
-	styles    Styles
-	keys      keyMap
-	help      help.Model
-	focus     focusCol
-	lastError error
+	styles      Styles
+	keys        keyMap
+	help        help.Model
+	focus       focusCol
+	lastError   error
+	currentView viewMode
 
 	sports  *ListColumn[Sport]
 	matches *ListColumn[Match]
 	streams *ListColumn[Stream]
 
-	status string
+	status        string
+	debugLines    []string
+	TerminalWidth int
 }
 
 //
@@ -116,11 +128,13 @@ func New() Model {
 
 	styles := NewStyles()
 	m := Model{
-		apiClient: client,
-		styles:    styles,
-		keys:      defaultKeys(),
-		help:      help.New(),
-		focus:     focusSports,
+		apiClient:  client,
+		styles:     styles,
+		keys:       defaultKeys(),
+		help:       help.New(),
+		focus:      focusSports,
+		currentView: viewMain,
+		debugLines: []string{},
 	}
 
 	m.sports = NewListColumn[Sport]("Sports", func(s Sport) string { return s.Name })
@@ -154,40 +168,78 @@ func (m Model) Init() tea.Cmd {
 // ────────────────────────────────
 //
 
-func (m Model) dynamicHelp() string {
-	switch m.focus {
-	case focusSports, focusMatches:
-		return m.help.View(keyMap{
-			Up: m.keys.Up, Down: m.keys.Down, Left: m.keys.Left, Right: m.keys.Right,
-			Enter: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
-			OpenBrowser: m.keys.OpenBrowser, OpenMPV: m.keys.OpenMPV,
-			Quit: m.keys.Quit, Refresh: m.keys.Refresh,
-		})
-	case focusStreams:
-		return m.help.View(keyMap{
-			Up: m.keys.Up, Down: m.keys.Down, Left: m.keys.Left, Right: m.keys.Right,
-			Enter: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "mpv / browser")),
-			OpenBrowser: m.keys.OpenBrowser, OpenMPV: m.keys.OpenMPV,
-			Quit: m.keys.Quit, Refresh: m.keys.Refresh,
-		})
+func (m Model) View() string {
+	switch m.currentView {
+	case viewHelp:
+		return m.renderHelpPanel()
+	case viewDebug:
+		return m.renderDebugPanel()
 	default:
-		return m.help.View(m.keys)
+		return m.renderMainView()
 	}
 }
 
-func (m Model) View() string {
+func (m Model) renderMainView() string {
 	cols := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		m.sports.View(m.styles, m.focus == focusSports),
 		m.matches.View(m.styles, m.focus == focusMatches),
 		m.streams.View(m.styles, m.focus == focusStreams),
 	)
-	
 	status := m.styles.Status.Render(m.status)
 	if m.lastError != nil {
 		status = m.styles.Error.Render(fmt.Sprintf("⚠️  %v", m.lastError))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, cols, status, m.dynamicHelp())
+	return lipgloss.JoinVertical(lipgloss.Left, cols, status, m.help.View(m.keys))
+}
+
+func (m Model) renderHelpPanel() string {
+	header := m.styles.Title.Render("Keybindings Help")
+	bindings := [][]string{
+		{"↑/↓ or k/j", "Navigate list"},
+		{"←/→ or h/l", "Move focus between columns"},
+		{"Enter", "Select / Open"},
+		{"O", "Open in browser"},
+		{"P", "Open in mpv"},
+		{"R", "Refresh"},
+		{"Q", "Quit"},
+		{"F1 / ?", "Toggle this help"},
+		{"F12", "Show debug panel"},
+		{"Esc", "Return to main view"},
+	}
+
+	var sb strings.Builder
+	sb.WriteString(header + "\n\n")
+	for _, b := range bindings {
+		sb.WriteString(fmt.Sprintf("%-18s %s\n", b[0], b[1]))
+	}
+	sb.WriteString("\nPress Esc to return.")
+
+	panel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FA8072")). // salmon border
+		Padding(1, 2).
+		Width(int(float64(m.TerminalWidth) * 0.97)).
+		Render(sb.String())
+
+	return panel
+}
+
+func (m Model) renderDebugPanel() string {
+	header := m.styles.Title.Render("Debug Output (F12 / Esc to close)")
+	if len(m.debugLines) == 0 {
+		m.debugLines = append(m.debugLines, "(no debug output yet)")
+	}
+	content := strings.Join(m.debugLines, "\n")
+
+	panel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FA8072")).
+		Padding(1, 2).
+		Width(int(float64(m.TerminalWidth) * 0.97)).
+		Render(header + "\n\n" + content)
+
+	return panel
 }
 
 //
@@ -198,27 +250,18 @@ func (m Model) View() string {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+
 	case tea.WindowSizeMsg:
-		// Reserve space for help and status at bottom
+		m.TerminalWidth = msg.Width
+
 		usableHeight := int(float64(msg.Height) * 0.9)
-		
-		// Use 85% of terminal width to leave breathing room on the right
 		totalAvailableWidth := int(float64(msg.Width) * 0.97)
-		
-		// Each column needs 4 chars for border (2) + padding (2)
 		borderPadding := 4
-		
-		// Calculate width per column
-		// We have 3 columns, each needs borderPadding space
 		totalBorderSpace := borderPadding * 3
 		availableWidth := totalAvailableWidth - totalBorderSpace
-		
-		// Divide available width equally among 3 columns
 		colWidth := availableWidth / 3
-		
-		// Give any remainder to the last column
 		remainder := availableWidth % 3
-		
+
 		m.sports.SetWidth(colWidth + borderPadding)
 		m.matches.SetWidth(colWidth + borderPadding)
 		m.streams.SetWidth(colWidth + remainder + borderPadding)
@@ -229,6 +272,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		switch {
+		case msg.String() == "esc":
+			m.currentView = viewMain
+			return m, nil
+
+		case key.Matches(msg, m.keys.Help):
+			if m.currentView == viewHelp {
+				m.currentView = viewMain
+			} else {
+				m.currentView = viewHelp
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.Debug):
+			if m.currentView == viewDebug {
+				m.currentView = viewMain
+			} else {
+				m.currentView = viewDebug
+			}
+			return m, nil
+		}
+
+		if m.currentView != viewMain {
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -300,8 +369,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == focusStreams {
 				if st, ok := m.streams.Selected(); ok {
 					go func(st Stream) {
+						m.debugLines = append(m.debugLines, fmt.Sprintf("Attempting extractor for %s", st.EmbedURL))
 						if err := m.forceMPVLaunch(st); err != nil {
 							m.lastError = err
+							m.debugLines = append(m.debugLines, fmt.Sprintf("Extractor failed: %v", err))
+						} else {
+							m.debugLines = append(m.debugLines, "Extractor success, launched MPV")
+						}
+						if len(m.debugLines) > 200 {
+							m.debugLines = m.debugLines[len(m.debugLines)-200:]
 						}
 					}(st)
 					m.status = fmt.Sprintf("🎞️ Attempting mpv: %s", st.EmbedURL)
@@ -399,13 +475,13 @@ func (m Model) launchMPV(st Stream) tea.Cmd {
 	}
 }
 
-// forceMPVLaunch attempts to extract .m3u8 and open it in mpv directly.
 func (m Model) forceMPVLaunch(st Stream) error {
 	embed := strings.TrimSpace(st.EmbedURL)
 	if embed == "" {
 		return fmt.Errorf("no embed URL for stream %s", st.ID)
 	}
 
+	m.debugLines = append(m.debugLines, fmt.Sprintf("[extractor] fetching %s", embed))
 	origin, referer, ua, err := deriveHeaders(embed)
 	if err != nil {
 		return fmt.Errorf("bad embed URL: %w", err)
@@ -417,6 +493,7 @@ func (m Model) forceMPVLaunch(st Stream) error {
 	}
 
 	m3u8 := extractM3U8(body)
+	m.debugLines = append(m.debugLines, fmt.Sprintf("[extractor] yielded %s", m3u8))
 	if m3u8 == "" {
 		return fmt.Errorf("no .m3u8 found in embed page")
 	}
