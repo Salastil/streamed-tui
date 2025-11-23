@@ -97,6 +97,17 @@ func formatViewerCount(count int) string {
 	return fmt.Sprintf("%d", count)
 }
 
+func filterStreams(streams []Stream) []Stream {
+	filtered := streams[:0]
+	for _, st := range streams {
+		if strings.EqualFold(st.Source, "admin") {
+			continue
+		}
+		filtered = append(filtered, st)
+	}
+	return filtered
+}
+
 // ────────────────────────────────
 // MODEL
 // ────────────────────────────────
@@ -313,15 +324,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		totalBorderSpace := borderPadding * 3
 		availableWidth := totalAvailableWidth - totalBorderSpace
 
-                // Allocate widths with weights: Sports=3, Matches=10, Streams=5 (18 total)
-                // Streams gain an additional ~20% width by borrowing space from Matches.
-                weightTotal := 18
-                unit := availableWidth / weightTotal
-                remainder := availableWidth - (unit * weightTotal)
+		// Allocate widths with weights: Sports=3, Matches=10, Streams=5 (18 total)
+		// Streams gain an additional ~20% width by borrowing space from Matches.
+		weightTotal := 18
+		unit := availableWidth / weightTotal
+		remainder := availableWidth - (unit * weightTotal)
 
-                sportsWidth := unit * 3
-                matchesWidth := unit * 10
-                streamsWidth := unit * 5
+		sportsWidth := unit * 3
+		matchesWidth := unit * 10
+		streamsWidth := unit * 5
 
 		// Assign any leftover pixels to the widest column (matches) to keep alignment.
 		matchesWidth += remainder
@@ -502,7 +513,7 @@ func (m Model) fetchStreamsForMatch(mt Match) tea.Cmd {
 		if err != nil {
 			return errorMsg(err)
 		}
-		return streamsLoadedMsg(streams)
+		return streamsLoadedMsg(filterStreams(streams))
 	}
 }
 
