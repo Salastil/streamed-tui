@@ -20,7 +20,7 @@ type keyMap struct {
 	Up, Down, Left, Right key.Binding
 	Enter, Quit, Refresh  key.Binding
 	OpenBrowser, OpenMPV  key.Binding
-	Help, Debug           key.Binding
+	Help                  key.Binding
 }
 
 func defaultKeys() keyMap {
@@ -35,7 +35,6 @@ func defaultKeys() keyMap {
 		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		Help:        key.NewBinding(key.WithKeys("f1", "?"), key.WithHelp("F1/?", "toggle help")),
-		Debug:       key.NewBinding(key.WithKeys("f12"), key.WithHelp("F12", "debug panel")),
 	}
 }
 
@@ -46,7 +45,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right},
-		{k.Enter, k.OpenBrowser, k.OpenMPV, k.Refresh, k.Help, k.Debug, k.Quit},
+		{k.Enter, k.OpenBrowser, k.OpenMPV, k.Refresh, k.Help, k.Quit},
 	}
 }
 
@@ -78,7 +77,6 @@ const (
 const (
 	viewMain viewMode = iota
 	viewHelp
-	viewDebug
 )
 
 // ────────────────────────────────
@@ -129,7 +127,7 @@ func New(debug bool) Model {
 	}
 
 	if debug {
-		m.currentView = viewDebug
+		m.debugLines = append(m.debugLines, "(debug logging enabled)")
 	}
 
 	m.sports = NewListColumn[Sport]("Sports", func(s Sport) string { return s.Name })
@@ -165,8 +163,6 @@ func (m Model) View() string {
 	switch m.currentView {
 	case viewHelp:
 		return m.renderHelpPanel()
-	case viewDebug:
-		return m.renderDebugPanel()
 	default:
 		return m.renderMainView()
 	}
@@ -180,7 +176,8 @@ func (m Model) renderMainView() string {
 		m.streams.View(m.styles, m.focus == focusStreams),
 	)
 	status := m.renderStatusLine()
-	return lipgloss.JoinVertical(lipgloss.Left, cols, status, m.help.View(m.keys))
+	debugPane := m.renderDebugPane()
+	return lipgloss.JoinVertical(lipgloss.Left, cols, status, debugPane, m.help.View(m.keys))
 }
 
 func (m Model) renderStatusLine() string {
@@ -216,7 +213,6 @@ func (m Model) renderHelpPanel() string {
 		{"R", "Refresh"},
 		{"Q", "Quit"},
 		{"F1 / ?", "Toggle this help"},
-		{"F12", "Show debug panel"},
 		{"Esc", "Return to main view"},
 	}
 
@@ -237,21 +233,30 @@ func (m Model) renderHelpPanel() string {
 	return panel
 }
 
-func (m Model) renderDebugPanel() string {
-	header := m.styles.Title.Render("Debug Output (F12 / Esc to close)")
+func (m Model) renderDebugPane() string {
+	header := m.styles.Subtle.Render("Debug log")
+	visibleLines := 4
 	if len(m.debugLines) == 0 {
-		m.debugLines = append(m.debugLines, "(no debug output yet)")
+		m.debugLines = append(m.debugLines, "(debug log empty)")
 	}
-	content := strings.Join(m.debugLines, "\n")
+	start := len(m.debugLines) - visibleLines
+	if start < 0 {
+		start = 0
+	}
+	lines := m.debugLines[start:]
+	for len(lines) < visibleLines {
+		lines = append(lines, "")
+	}
 
-	panel := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FA8072")).
-		Padding(1, 2).
-		Width(int(float64(m.TerminalWidth) * 0.95)).
-		Render(header + "\n\n" + content)
+	content := strings.Join(lines, "\n")
+	width := m.TerminalWidth
+	if width == 0 {
+		width = 80
+	}
 
-	return panel
+	return lipgloss.NewStyle().
+		Width(width).
+		Render(header + "\n" + content)
 }
 
 // ────────────────────────────────
@@ -270,7 +275,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.TerminalWidth = msg.Width
-		usableHeight := int(float64(msg.Height) * 0.9)
+		debugPaneHeight := 5
+		statusHeight := 1
+		helpHeight := 2
+		reservedHeight := debugPaneHeight + statusHeight + helpHeight
+		usableHeight := msg.Height - reservedHeight
+		if usableHeight < 5 {
+			usableHeight = 5
+		}
 		totalAvailableWidth := int(float64(msg.Width) * 0.95)
 		borderPadding := 4
 		totalBorderSpace := borderPadding * 3
@@ -303,14 +315,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentView = viewMain
 			} else {
 				m.currentView = viewHelp
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.Debug):
-			if m.currentView == viewDebug {
-				m.currentView = viewMain
-			} else {
-				m.currentView = viewDebug
 			}
 			return m, nil
 		}
