@@ -149,7 +149,7 @@ func New(debug bool) Model {
 		return fmt.Sprintf("#%d %s (%s) – %s", st.StreamNo, st.Language, quality, st.Source)
 	})
 
-	m.status = fmt.Sprintf("Using API %s | Loading…", base)
+	m.status = fmt.Sprintf("Using API %s | Loading sports and matches…", base)
 	return m
 }
 
@@ -179,11 +179,30 @@ func (m Model) renderMainView() string {
 		m.matches.View(m.styles, m.focus == focusMatches),
 		m.streams.View(m.styles, m.focus == focusStreams),
 	)
-	status := m.styles.Status.Render(m.status)
-	if m.lastError != nil {
-		status = m.styles.Error.Render(fmt.Sprintf("⚠️  %v", m.lastError))
-	}
+	status := m.renderStatusLine()
 	return lipgloss.JoinVertical(lipgloss.Left, cols, status, m.help.View(m.keys))
+}
+
+func (m Model) renderStatusLine() string {
+	focusLabel := m.currentFocusLabel()
+	statusText := fmt.Sprintf("%s  | Focus: %s (←/→)", m.status, focusLabel)
+	if m.lastError != nil {
+		return m.styles.Error.Render(fmt.Sprintf("⚠️  %v  | Focus: %s (Esc to dismiss)", m.lastError, focusLabel))
+	}
+	return m.styles.Status.Render(statusText)
+}
+
+func (m Model) currentFocusLabel() string {
+	switch m.focus {
+	case focusSports:
+		return "Sports"
+	case focusMatches:
+		return "Matches"
+	case focusStreams:
+		return "Streams"
+	default:
+		return "Unknown"
+	}
 }
 
 func (m Model) renderHelpPanel() string {
@@ -256,12 +275,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		borderPadding := 4
 		totalBorderSpace := borderPadding * 3
 		availableWidth := totalAvailableWidth - totalBorderSpace
-		colWidth := availableWidth / 3
-		remainder := availableWidth % 3
 
-		m.sports.SetWidth(colWidth + borderPadding)
-		m.matches.SetWidth(colWidth + borderPadding)
-		m.streams.SetWidth(colWidth + remainder + borderPadding)
+		baseUnit := availableWidth / 6
+		remainder := availableWidth % 6
+
+		sportsWidth := baseUnit
+		matchesWidth := baseUnit * 4
+		streamsWidth := baseUnit
+
+		m.sports.SetWidth(sportsWidth + borderPadding)
+		m.matches.SetWidth(matchesWidth + remainder + borderPadding)
+		m.streams.SetWidth(streamsWidth + borderPadding)
 
 		m.sports.SetHeight(usableHeight)
 		m.matches.SetHeight(usableHeight)
@@ -337,12 +361,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.focus {
 			case focusSports:
 				if sport, ok := m.sports.Selected(); ok {
+					m.lastError = nil
 					m.status = fmt.Sprintf("Loading matches for %s…", sport.Name)
 					m.streams.SetItems(nil)
 					return m, m.fetchMatchesForSport(sport)
 				}
 			case focusMatches:
 				if mt, ok := m.matches.Selected(); ok {
+					m.lastError = nil
 					m.status = fmt.Sprintf("Loading streams for %s…", mt.Title)
 					return m, m.fetchStreamsForMatch(mt)
 				}
@@ -360,6 +386,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == focusStreams {
 				if st, ok := m.streams.Selected(); ok && st.EmbedURL != "" {
 					_ = openBrowser(st.EmbedURL)
+					m.lastError = nil
 					m.status = fmt.Sprintf("🌐 Opened in browser: %s", st.EmbedURL)
 				}
 			}
@@ -369,27 +396,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sportsLoadedMsg:
 		m.sports.SetItems(msg)
-		m.status = fmt.Sprintf("Loaded %d sports", len(msg))
+		m.lastError = nil
+		m.status = fmt.Sprintf("Loaded %d sports – pick one with Enter or stay on Popular Matches", len(msg))
 		return m, nil
 
 	case matchesLoadedMsg:
 		m.matches.SetTitle(msg.Title)
 		m.matches.SetItems(msg.Matches)
-		m.status = fmt.Sprintf("Loaded %d matches", len(msg.Matches))
+		m.lastError = nil
+		m.status = fmt.Sprintf("Loaded %d matches – choose one to load streams", len(msg.Matches))
 		return m, nil
 
 	case streamsLoadedMsg:
 		m.streams.SetItems(msg)
-		m.status = fmt.Sprintf("Loaded %d streams", len(msg))
+		m.lastError = nil
+		m.status = fmt.Sprintf("Loaded %d streams – Enter to launch mpv, o to open in browser", len(msg))
 		m.focus = focusStreams
 		return m, nil
 
 	case launchStreamMsg:
+		m.lastError = nil
 		m.status = fmt.Sprintf("🎥 Launched mpv: %s", msg.URL)
 		return m, nil
 
 	case errorMsg:
 		m.lastError = msg
+		m.status = "Encountered an error while contacting the API"
 		return m, nil
 	}
 	return m, nil

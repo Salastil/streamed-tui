@@ -17,6 +17,7 @@ type Styles struct {
 	Active lipgloss.Style
 	Status lipgloss.Style
 	Error  lipgloss.Style // NEW: for red bold error lines
+	Subtle lipgloss.Style
 }
 
 func NewStyles() Styles {
@@ -30,6 +31,8 @@ func NewStyles() Styles {
 			Padding(0, 1).
 			MarginRight(1),
 		Status: lipgloss.NewStyle().Foreground(lipgloss.Color("8")).MarginTop(1),
+		Error:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true),
+		Subtle: lipgloss.NewStyle().Foreground(lipgloss.Color("243")),
 	}
 }
 
@@ -72,8 +75,8 @@ func (c *ListColumn[T]) SetWidth(w int) {
 }
 
 func (c *ListColumn[T]) SetHeight(h int) {
-	if h > 5 {
-		c.height = h - 5
+	if h > 6 {
+		c.height = h - 6
 	}
 }
 
@@ -109,7 +112,12 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 		box = styles.Active
 	}
 
-	head := styles.Title.Render(c.title)
+	titleText := fmt.Sprintf("%s (%d)", c.title, len(c.items))
+	if focused {
+		titleText = fmt.Sprintf("▶ %s", titleText)
+	}
+	head := styles.Title.Render(titleText)
+	meta := styles.Subtle.Render("Waiting for data…")
 	lines := []string{}
 
 	if len(c.items) == 0 {
@@ -120,6 +128,7 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 		if end > len(c.items) {
 			end = len(c.items)
 		}
+		meta = styles.Subtle.Render(fmt.Sprintf("Showing %d–%d of %d", start+1, end, len(c.items)))
 		for i := start; i < end; i++ {
 			cursor := "  "
 			lineText := c.render(c.items[i])
@@ -145,5 +154,5 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 
 	content := strings.Join(lines, "\n")
 	// IMPORTANT: width = interior content width + 4 (border+padding)
-	return box.Width(c.width + 4).Render(head + "\n" + content)
+	return box.Width(c.width + 4).Render(head + "\n" + meta + "\n" + content)
 }
