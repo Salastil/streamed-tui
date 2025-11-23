@@ -231,7 +231,7 @@ func (m Model) renderHelpPanel() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#FA8072")).
 		Padding(1, 2).
-		Width(int(float64(m.TerminalWidth) * 0.97)).
+		Width(int(float64(m.TerminalWidth) * 0.95)).
 		Render(sb.String())
 
 	return panel
@@ -248,7 +248,7 @@ func (m Model) renderDebugPanel() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#FA8072")).
 		Padding(1, 2).
-		Width(int(float64(m.TerminalWidth) * 0.97)).
+		Width(int(float64(m.TerminalWidth) * 0.95)).
 		Render(header + "\n\n" + content)
 
 	return panel
@@ -271,7 +271,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.TerminalWidth = msg.Width
 		usableHeight := int(float64(msg.Height) * 0.9)
-		totalAvailableWidth := int(float64(msg.Width) * 0.97)
+		totalAvailableWidth := int(float64(msg.Width) * 0.95)
 		borderPadding := 4
 		totalBorderSpace := borderPadding * 3
 		availableWidth := totalAvailableWidth - totalBorderSpace
