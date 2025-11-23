@@ -175,9 +175,9 @@ func (m Model) renderMainView() string {
 		m.matches.View(m.styles, m.focus == focusMatches),
 		m.streams.View(m.styles, m.focus == focusStreams),
 	)
-	status := m.renderStatusLine()
 	debugPane := m.renderDebugPane()
-	return lipgloss.JoinVertical(lipgloss.Left, cols, status, debugPane, m.help.View(m.keys))
+	status := m.renderStatusLine()
+	return lipgloss.JoinVertical(lipgloss.Left, cols, debugPane, status, m.help.View(m.keys))
 }
 
 func (m Model) renderStatusLine() string {
@@ -234,7 +234,7 @@ func (m Model) renderHelpPanel() string {
 }
 
 func (m Model) renderDebugPane() string {
-	header := m.styles.Subtle.Render("Debug log")
+	header := m.styles.Title.Render("Debug log")
 	visibleLines := 4
 	if len(m.debugLines) == 0 {
 		m.debugLines = append(m.debugLines, "(debug log empty)")
@@ -254,8 +254,15 @@ func (m Model) renderDebugPane() string {
 		width = 80
 	}
 
+	debugWidth := int(float64(width) * 0.95)
+	if debugWidth <= 0 {
+		debugWidth = width
+	}
+
 	return lipgloss.NewStyle().
-		Width(width).
+		Width(debugWidth).
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
 		Render(header + "\n" + content)
 }
 
@@ -275,7 +282,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.TerminalWidth = msg.Width
-		debugPaneHeight := 5
+		debugPaneHeight := 7
 		statusHeight := 1
 		helpHeight := 2
 		reservedHeight := debugPaneHeight + statusHeight + helpHeight
