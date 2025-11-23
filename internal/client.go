@@ -71,6 +71,7 @@ type Stream struct {
 	HD       bool   `json:"hd"`
 	EmbedURL string `json:"embedUrl"`
 	Source   string `json:"source"`
+	Viewers  int    `json:"viewers"`
 }
 
 // ────────────────────────────────

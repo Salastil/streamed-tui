@@ -79,6 +79,24 @@ const (
 	viewHelp
 )
 
+func formatViewerCount(count int) string {
+	if count >= 1_000_000 {
+		value := float64(count) / 1_000_000
+		formatted := fmt.Sprintf("%.1f", value)
+		formatted = strings.TrimSuffix(formatted, ".0")
+		return formatted + "m"
+	}
+
+	if count >= 1000 {
+		value := float64(count) / 1000
+		formatted := fmt.Sprintf("%.1f", value)
+		formatted = strings.TrimSuffix(formatted, ".0")
+		return formatted + "k"
+	}
+
+	return fmt.Sprintf("%d", count)
+}
+
 // ────────────────────────────────
 // MODEL
 // ────────────────────────────────
@@ -144,7 +162,8 @@ func New(debug bool) Model {
 		if st.HD {
 			quality = "HD"
 		}
-		return fmt.Sprintf("#%d %s (%s) – %s", st.StreamNo, st.Language, quality, st.Source)
+		viewers := formatViewerCount(st.Viewers)
+		return fmt.Sprintf("#%d %s (%s) – %s — (%s viewers)", st.StreamNo, st.Language, quality, st.Source, viewers)
 	})
 
 	m.status = fmt.Sprintf("Using API %s | Loading sports and matches…", base)
