@@ -268,8 +268,6 @@ function installTouchAndWindowSpoofing(page) {
     console.log('[puppeteer] navigating to ' + embedURL);
     await page.goto(embedURL, { waitUntil: 'networkidle2', timeout: timeoutMs });
     console.log('[puppeteer] primary navigation reached networkidle2');
-    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: timeoutMs }).catch(() => {});
-    console.log('[puppeteer] secondary navigation step done');
   } catch (err) {
     console.error('[puppeteer] navigation warning: ' + err.message);
   }
