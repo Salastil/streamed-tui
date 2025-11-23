@@ -24,12 +24,11 @@ func NewStyles() Styles {
 	border := lipgloss.RoundedBorder()
 	return Styles{
 		Title: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
-		Box:   lipgloss.NewStyle().Border(border).Padding(0, 1).MarginRight(1),
+		Box:   lipgloss.NewStyle().Border(border).Padding(0, 1),
 		Active: lipgloss.NewStyle().
 			Border(border).
 			BorderForeground(lipgloss.Color("#FA8072")). // Not pink, its Salmon obviously
-			Padding(0, 1).
-			MarginRight(1),
+			Padding(0, 1),
 		Status: lipgloss.NewStyle().Foreground(lipgloss.Color("8")).MarginTop(1),
 		Error:  lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true),
 		Subtle: lipgloss.NewStyle().Foreground(lipgloss.Color("243")),

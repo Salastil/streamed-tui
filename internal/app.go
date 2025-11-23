@@ -169,12 +169,12 @@ func (m Model) View() string {
 }
 
 func (m Model) renderMainView() string {
-	cols := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		m.sports.View(m.styles, m.focus == focusSports),
-		m.matches.View(m.styles, m.focus == focusMatches),
-		m.streams.View(m.styles, m.focus == focusStreams),
-	)
+	gap := lipgloss.NewStyle().MarginRight(1)
+	sportsCol := gap.Render(m.sports.View(m.styles, m.focus == focusSports))
+	matchesCol := gap.Render(m.matches.View(m.styles, m.focus == focusMatches))
+	streamsCol := m.streams.View(m.styles, m.focus == focusStreams)
+
+	cols := lipgloss.JoinHorizontal(lipgloss.Top, sportsCol, matchesCol, streamsCol)
 	colsWidth := lipgloss.Width(cols)
 	debugPane := m.renderDebugPane(colsWidth)
 	status := m.renderStatusLine()
