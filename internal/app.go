@@ -168,6 +168,18 @@ func New(debug bool) Model {
 		}
 		return fmt.Sprintf("%s  %s  (%s)", when, title, mt.Category)
 	})
+	m.matches.SetSeparator(func(prev, curr Match) (string, bool) {
+		currDay := time.UnixMilli(curr.Date).Local().Format("Jan 2")
+		prevDay := ""
+		if prev.Date != 0 {
+			prevDay = time.UnixMilli(prev.Date).Local().Format("Jan 2")
+		}
+
+		if prevDay == "" || prevDay != currDay {
+			return currDay, true
+		}
+		return "", false
+	})
 	m.streams = NewListColumn[Stream]("Streams", func(st Stream) string {
 		quality := "SD"
 		if st.HD {
