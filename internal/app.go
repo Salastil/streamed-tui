@@ -23,6 +23,11 @@ type keyMap struct {
 	Help                  key.Binding
 }
 
+type helpKeyMap struct {
+	base    keyMap
+	showMPV bool
+}
+
 func defaultKeys() keyMap {
 	return keyMap{
 		Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
@@ -46,6 +51,28 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right},
 		{k.Enter, k.OpenBrowser, k.OpenMPV, k.Refresh, k.Help, k.Quit},
+	}
+}
+
+func (h helpKeyMap) ShortHelp() []key.Binding {
+	bindings := []key.Binding{h.base.Up, h.base.Down, h.base.Left, h.base.Right, h.base.Enter, h.base.OpenBrowser}
+	if h.showMPV {
+		bindings = append(bindings, h.base.OpenMPV)
+	}
+	bindings = append(bindings, h.base.Quit)
+	return bindings
+}
+
+func (h helpKeyMap) FullHelp() [][]key.Binding {
+	row2 := []key.Binding{h.base.Enter, h.base.OpenBrowser}
+	if h.showMPV {
+		row2 = append(row2, h.base.OpenMPV)
+	}
+	row2 = append(row2, h.base.Refresh, h.base.Help, h.base.Quit)
+
+	return [][]key.Binding{
+		{h.base.Up, h.base.Down, h.base.Left, h.base.Right},
+		row2,
 	}
 }
 
@@ -97,15 +124,23 @@ func formatViewerCount(count int) string {
 	return fmt.Sprintf("%d", count)
 }
 
-func filterStreams(streams []Stream) []Stream {
-	filtered := streams[:0]
+func reorderStreams(streams []Stream) []Stream {
+	if len(streams) == 0 {
+		return streams
+	}
+
+	regular := make([]Stream, 0, len(streams))
+	admin := make([]Stream, 0)
+
 	for _, st := range streams {
 		if strings.EqualFold(st.Source, "admin") {
+			admin = append(admin, st)
 			continue
 		}
-		filtered = append(filtered, st)
+		regular = append(regular, st)
 	}
-	return filtered
+
+	return append(regular, admin...)
 }
 
 // ────────────────────────────────
@@ -188,6 +223,14 @@ func New(debug bool) Model {
 		viewers := formatViewerCount(st.Viewers)
 		return fmt.Sprintf("#%d %s (%s) – %s — (%s viewers)", st.StreamNo, st.Language, quality, st.Source, viewers)
 	})
+	m.streams.SetSeparator(func(prev, curr Stream) (string, bool) {
+		isAdmin := strings.EqualFold(curr.Source, "admin")
+		wasAdmin := strings.EqualFold(prev.Source, "admin")
+		if isAdmin && !wasAdmin {
+			return "Browser Only", true
+		}
+		return "", false
+	})
 
 	m.status = fmt.Sprintf("Using API %s | Loading sports and matches…", base)
 	return m
@@ -220,7 +263,15 @@ func (m Model) renderMainView() string {
 	colsWidth := lipgloss.Width(cols)
 	debugPane := m.renderDebugPane(colsWidth)
 	status := m.renderStatusLine()
-	return lipgloss.JoinVertical(lipgloss.Left, cols, debugPane, status, m.help.View(m.keys))
+	keys := helpKeyMap{base: m.keys, showMPV: m.canUseMPVShortcut()}
+	return lipgloss.JoinVertical(lipgloss.Left, cols, debugPane, status, m.help.View(keys))
+}
+
+func (m Model) canUseMPVShortcut() bool {
+	if st, ok := m.streams.Selected(); ok {
+		return !strings.EqualFold(st.Source, "admin")
+	}
+	return true
 }
 
 func (m Model) renderStatusLine() string {
@@ -253,6 +304,7 @@ func (m Model) renderHelpPanel() string {
 		{"Enter", "Select / Open"},
 		{"O", "Open in browser"},
 		{"P", "Open in mpv"},
+		{"Admin streams", "Browser-only because STREAMED obfuscates them"},
 		{"R", "Refresh"},
 		{"Q", "Quit"},
 		{"F1 / ?", "Toggle this help"},
@@ -432,6 +484,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case focusStreams:
 				if st, ok := m.streams.Selected(); ok {
+					if strings.EqualFold(st.Source, "admin") {
+						if st.EmbedURL != "" {
+							_ = openBrowser(st.EmbedURL)
+							m.lastError = nil
+							m.status = fmt.Sprintf("🌐 Opened in browser: %s", st.EmbedURL)
+						}
+						return m, nil
+					}
 					return m, tea.Batch(
 						m.logToUI(fmt.Sprintf("Attempting extractor for %s", st.EmbedURL)),
 						m.runExtractor(st),
@@ -525,7 +585,7 @@ func (m Model) fetchStreamsForMatch(mt Match) tea.Cmd {
 		if err != nil {
 			return errorMsg(err)
 		}
-		return streamsLoadedMsg(filterStreams(streams))
+		return streamsLoadedMsg(reorderStreams(streams))
 	}
 }
 
