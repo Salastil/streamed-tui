@@ -255,8 +255,10 @@ func lookupHeaderValue(hdrs map[string]string, name string) string {
 
 // LaunchMPVWithHeaders spawns mpv to play the given M3U8 URL using the minimal
 // header set required for successful playback (User-Agent, Origin, Referer).
-// Logs are streamed via the provided callback.
-func LaunchMPVWithHeaders(m3u8 string, hdrs map[string]string, log func(string)) error {
+// When attachOutput is true, mpv stays attached to the current terminal and the
+// call blocks until the player exits; otherwise mpv is started quietly so the
+// TUI can continue running. Logs are streamed via the provided callback.
+func LaunchMPVWithHeaders(m3u8 string, hdrs map[string]string, log func(string), attachOutput bool) error {
 	if log == nil {
 		log = func(string) {}
 	}
@@ -264,7 +266,10 @@ func LaunchMPVWithHeaders(m3u8 string, hdrs map[string]string, log func(string))
 		return fmt.Errorf("empty m3u8 URL")
 	}
 
-	args := []string{"--no-terminal", "--really-quiet"}
+	args := []string{}
+	if !attachOutput {
+		args = append(args, "--no-terminal", "--really-quiet")
+	}
 
 	// Only forward the minimal headers mpv requires to mirror the working
 	// curl→mpv handoff: User-Agent, Origin, and Referer. Extra headers
@@ -279,14 +284,16 @@ func LaunchMPVWithHeaders(m3u8 string, hdrs map[string]string, log func(string))
 		{lookup: "origin", display: "Origin"},
 		{lookup: "referer", display: "Referer"},
 	}
+	headerCount := 0
 	for _, hk := range headerKeys {
 		if v := lookupHeaderValue(hdrs, hk.lookup); v != "" {
 			args = append(args, fmt.Sprintf("--http-header-fields=%s: %s", hk.display, v))
+			headerCount++
 		}
 	}
 
 	args = append(args, m3u8)
-	log(fmt.Sprintf("[mpv] launching with %d headers: %s", len(args)-3, m3u8))
+	log(fmt.Sprintf("[mpv] launching with %d headers: %s", headerCount, m3u8))
 
 	cmd := exec.Command("mpv", args...)
 	cmd.Stdout = os.Stdout
@@ -295,6 +302,16 @@ func LaunchMPVWithHeaders(m3u8 string, hdrs map[string]string, log func(string))
 	if err := cmd.Start(); err != nil {
 		log(fmt.Sprintf("[mpv] launch error: %v", err))
 		return err
+	}
+
+	if attachOutput {
+		log("[mpv] started (attached)")
+		if err := cmd.Wait(); err != nil {
+			log(fmt.Sprintf("[mpv] exited with error: %v", err))
+			return err
+		}
+		log("[mpv] exited")
+		return nil
 	}
 
 	log(fmt.Sprintf("[mpv] started (pid %d)", cmd.Process.Pid))
@@ -326,7 +343,7 @@ func RunExtractorCLI(embedURL string, debug bool) error {
 		fmt.Printf("[extractor] captured %d headers\n", len(hdrs))
 	}
 
-	if err := LaunchMPVWithHeaders(m3u8, hdrs, logger); err != nil {
+	if err := LaunchMPVWithHeaders(m3u8, hdrs, logger, true); err != nil {
 		fmt.Printf("[mpv] ❌ %v\n", err)
 		return err
 	}

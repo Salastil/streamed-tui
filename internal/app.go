@@ -471,7 +471,7 @@ func (m Model) runExtractor(st Stream) tea.Cmd {
 			logcb(fmt.Sprintf("[extractor] Captured %d headers", len(hdrs)))
 		}
 
-		if err := LaunchMPVWithHeaders(m3u8, hdrs, logcb); err != nil {
+		if err := LaunchMPVWithHeaders(m3u8, hdrs, logcb, false); err != nil {
 			logcb(fmt.Sprintf("[mpv] ❌ %v", err))
 			return debugLogMsg(fmt.Sprintf("MPV error: %v", err))
 		}
