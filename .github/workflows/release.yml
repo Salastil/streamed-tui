@@ -3,6 +3,9 @@ name: Build release binaries
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -95,6 +98,7 @@ jobs:
         if: startsWith(github.server_url, 'https://github.com')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
           files: dist/*
 
       - name: Publish release assets on Gitea
@@ -102,11 +106,37 @@ jobs:
         env:
           API_URL: ${{ github.api_url }}
           REPOSITORY: ${{ github.repository }}
-          RELEASE_ID: ${{ github.event.release.id }}
           TOKEN: ${{ secrets.CI_TOKEN || secrets.GITHUB_TOKEN || github.token }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           shopt -s nullglob
+
+          if [ -z "${RELEASE_ID:-}" ]; then
+            echo "Creating release ${TAG_NAME} on Gitea"
+            response=$(curl -sfSL -X POST \
+              -H "Authorization: token ${TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{\"tag_name\":\"${TAG_NAME}\",\"name\":\"${TAG_NAME}\",\"draft\":false,\"prerelease\":false}" \
+              "${API_URL}/repos/${REPOSITORY}/releases")
+
+            RELEASE_ID=$(python - "$response" <<'PY'
+import json, sys
+try:
+    data = json.loads(sys.argv[1])
+    print(data.get("id", ""))
+except Exception:
+    sys.exit(1)
+PY
+)
+
+            if [ -z "${RELEASE_ID}" ]; then
+              echo "Failed to create release" >&2
+              exit 1
+            fi
+          fi
+
           for file in dist/*; do
             name=$(basename "${file}")
             curl -sfSL -X POST \
