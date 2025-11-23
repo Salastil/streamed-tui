@@ -175,7 +175,8 @@ func (m Model) renderMainView() string {
 		m.matches.View(m.styles, m.focus == focusMatches),
 		m.streams.View(m.styles, m.focus == focusStreams),
 	)
-	debugPane := m.renderDebugPane()
+	colsWidth := lipgloss.Width(cols)
+	debugPane := m.renderDebugPane(colsWidth)
 	status := m.renderStatusLine()
 	return lipgloss.JoinVertical(lipgloss.Left, cols, debugPane, status, m.help.View(m.keys))
 }
@@ -233,7 +234,7 @@ func (m Model) renderHelpPanel() string {
 	return panel
 }
 
-func (m Model) renderDebugPane() string {
+func (m Model) renderDebugPane(widthHint int) string {
 	header := m.styles.Title.Render("Debug log")
 	visibleLines := 4
 	if len(m.debugLines) == 0 {
@@ -249,18 +250,16 @@ func (m Model) renderDebugPane() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	width := m.TerminalWidth
+	width := widthHint
 	if width == 0 {
-		width = 80
-	}
-
-	debugWidth := int(float64(width) * 0.95)
-	if debugWidth <= 0 {
-		debugWidth = width
+		width = int(float64(m.TerminalWidth) * 0.95)
+		if width == 0 {
+			width = 80
+		}
 	}
 
 	return lipgloss.NewStyle().
-		Width(debugWidth).
+		Width(width).
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
 		Render(header + "\n" + content)
