@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,51 @@ type puppeteerResult struct {
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
 	Browser string            `json:"browser"`
+}
+
+type logBuffer struct {
+	buf    *bytes.Buffer
+	log    func(string)
+	prefix string
+}
+
+func (l *logBuffer) Write(p []byte) (int, error) {
+	if l.buf == nil {
+		l.buf = &bytes.Buffer{}
+	}
+	n, err := l.buf.Write(p)
+	if l.log != nil {
+		for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			l.log(l.prefix + trimmed)
+		}
+	}
+	return n, err
+}
+
+func (l *logBuffer) Bytes() []byte {
+	if l.buf == nil {
+		l.buf = &bytes.Buffer{}
+	}
+	return l.buf.Bytes()
+}
+
+func (l *logBuffer) String() string {
+	return string(l.Bytes())
+}
+
+func (l *logBuffer) Len() int {
+	return len(l.Bytes())
+}
+
+func (l *logBuffer) WriteTo(w io.Writer) (int64, error) {
+	if l.buf == nil {
+		return 0, nil
+	}
+	return l.buf.WriteTo(w)
 }
 
 func ensurePuppeteerAvailable() error {
@@ -65,10 +111,10 @@ func extractM3U8Lite(embedURL string, log func(string)) (string, map[string]stri
 	log(fmt.Sprintf("[puppeteer] launching chromium stealth runner for %s", embedURL))
 
 	cmd := exec.Command("node", runnerPath, embedURL)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &logBuffer{buf: &bytes.Buffer{}, log: func(line string) { log(line) }, prefix: "[puppeteer stdout] "}
+	stderr := &logBuffer{buf: &bytes.Buffer{}, log: func(line string) { log(line) }, prefix: "[puppeteer stderr] "}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if err := cmd.Run(); err != nil {
 		log(fmt.Sprintf("[puppeteer] runner error: %s", strings.TrimSpace(stderr.String())))
@@ -145,6 +191,7 @@ function installTouchAndWindowSpoofing(page) {
 
 (async () => {
   const { browser, flavor } = await launchBrowser();
+  console.log('[puppeteer] launched ' + flavor + ' (headless new)');
   const page = await browser.newPage();
   await installTouchAndWindowSpoofing(page);
 
@@ -168,14 +215,18 @@ function installTouchAndWindowSpoofing(page) {
       if (!captured && url.includes('.m3u8')) {
         const headers = req.headers();
         captured = { url, headers };
+        console.log('[puppeteer] found .m3u8 request: ' + url);
         resolve();
       }
     });
   });
 
   try {
+    console.log('[puppeteer] navigating to ' + embedURL);
     await page.goto(embedURL, { waitUntil: 'networkidle2', timeout: timeoutMs });
+    console.log('[puppeteer] primary navigation reached networkidle2');
     await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: timeoutMs }).catch(() => {});
+    console.log('[puppeteer] secondary navigation step done');
   } catch (err) {
     console.error('[puppeteer] navigation warning: ' + err.message);
   }
@@ -186,6 +237,7 @@ function installTouchAndWindowSpoofing(page) {
   ]);
 
   if (!captured) {
+    console.log('[puppeteer] no .m3u8 request observed, scanning DOM for fallback');
     const candidate = await page.evaluate(() => {
       try {
         const video = document.querySelector('video');
@@ -209,6 +261,7 @@ function installTouchAndWindowSpoofing(page) {
   if (captured) {
     // Enrich headers with cookies and referer if missing.
     const cookies = await page.cookies();
+    console.log('[puppeteer] collected ' + cookies.length + ' cookies during session');
     if (cookies && cookies.length > 0) {
       const cookieHeader = cookies.map(c => c.name + '=' + c.value).join('; ');
       if (!captured.headers) captured.headers = {};
