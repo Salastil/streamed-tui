@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -412,8 +413,9 @@ func lookupHeaderValue(hdrs map[string]string, name string) string {
 // LaunchMPVWithHeaders spawns mpv to play the given M3U8 URL using the minimal
 // header set required for successful playback (User-Agent, Origin, Referer).
 // When attachOutput is true, mpv stays attached to the current terminal and the
-// call blocks until the player exits; otherwise mpv is started quietly so the
-// TUI can continue running. Logs are streamed via the provided callback.
+// call blocks until the player exits; otherwise mpv is started quietly and
+// detached so closing the terminal will not terminate playback. Logs are
+// streamed via the provided callback.
 func LaunchMPVWithHeaders(m3u8 string, hdrs map[string]string, log func(string), attachOutput bool) error {
 	if log == nil {
 		log = func(string) {}
@@ -452,8 +454,22 @@ func LaunchMPVWithHeaders(m3u8 string, hdrs map[string]string, log func(string),
 	log(fmt.Sprintf("[mpv] launching with %d headers: %s", headerCount, m3u8))
 
 	cmd := exec.Command("mpv", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	if attachOutput {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	} else {
+		// Detach from the current terminal so closing it will not send
+		// SIGHUP to mpv. Discard stdio to avoid keeping the tty open.
+		devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+		if err != nil {
+			return fmt.Errorf("open devnull: %w", err)
+		}
+		cmd.Stdin = devNull
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	}
 
 	if err := cmd.Start(); err != nil {
 		log(fmt.Sprintf("[mpv] launch error: %v", err))
@@ -499,11 +515,11 @@ func RunExtractorCLI(embedURL string, debug bool) error {
 		fmt.Printf("[extractor] captured %d headers\n", len(hdrs))
 	}
 
-	if err := LaunchMPVWithHeaders(m3u8, hdrs, logger, true); err != nil {
+	if err := LaunchMPVWithHeaders(m3u8, hdrs, logger, false); err != nil {
 		fmt.Printf("[mpv] ❌ %v\n", err)
 		return err
 	}
 
-	fmt.Println("[mpv] ▶ streaming started")
+	fmt.Println("[mpv] ▶ streaming started (detached)")
 	return nil
 }
