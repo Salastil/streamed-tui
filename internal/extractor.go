@@ -25,6 +25,54 @@ type logBuffer struct {
 	prefix string
 }
 
+// findNodeModuleBase attempts to locate a directory containing the required
+// Puppeteer dependencies, starting from the current working directory and the
+// executable's directory, walking up parent paths until a node_modules match is
+// found. This allows the binary to resolve Node packages even when launched via
+// a .desktop file or from another directory.
+func findNodeModuleBase() (string, error) {
+	starts := []string{}
+
+	if wd, err := os.Getwd(); err == nil {
+		starts = append(starts, wd)
+	}
+
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		if exeDir != "" {
+			starts = append(starts, exeDir)
+		}
+	}
+
+	seen := map[string]struct{}{}
+	for _, start := range starts {
+		dir := filepath.Clean(start)
+		for {
+			if _, ok := seen[dir]; ok {
+				break
+			}
+			seen[dir] = struct{}{}
+
+			if dir == "" || dir == string(filepath.Separator) {
+				break
+			}
+
+			candidate := filepath.Join(dir, "node_modules", "puppeteer-extra", "package.json")
+			if _, err := os.Stat(candidate); err == nil {
+				return dir, nil
+			}
+
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+
+	return "", errors.New("puppeteer-extra not found; install dependencies with npm in the project directory")
+}
+
 func (l *logBuffer) Write(p []byte) (int, error) {
 	if l.buf == nil {
 		l.buf = &bytes.Buffer{}
@@ -64,23 +112,28 @@ func (l *logBuffer) WriteTo(w io.Writer) (int64, error) {
 	return l.buf.WriteTo(w)
 }
 
-func ensurePuppeteerAvailable() error {
+func ensurePuppeteerAvailable(baseDir string) error {
 	if _, err := exec.LookPath("node"); err != nil {
 		return fmt.Errorf("node executable not found: %w", err)
 	}
 
 	// Verify both puppeteer-extra and the stealth plugin are available from the
-	// project directory so the temporary runner can load them relative to cwd.
+	// discovered base directory so the temporary runner can load them reliably
+	// even when the binary is launched outside the repo (e.g., .desktop file).
 	requireScript := strings.Join([]string{
 		"const { createRequire } = require('module');",
-		"const req = createRequire(process.cwd() + '/');",
+		"const base = process.env.STREAMED_TUI_NODE_BASE || process.cwd();",
+		"const req = createRequire(base.endsWith('/') ? base : base + '/');",
 		"req.resolve('puppeteer-extra/package.json');",
 		"req.resolve('puppeteer-extra-plugin-stealth/package.json');",
 	}, "")
 
 	check := exec.Command("node", "-e", requireScript)
+	check.Dir = baseDir
+	check.Env = append(os.Environ(), fmt.Sprintf("STREAMED_TUI_NODE_BASE=%s", baseDir))
+
 	if err := check.Run(); err != nil {
-		return fmt.Errorf("puppeteer-extra or stealth plugin missing. Run `npm install puppeteer-extra puppeteer-extra-plugin-stealth puppeteer` in the project directory: %w", err)
+		return fmt.Errorf("puppeteer-extra or stealth plugin missing in %s. Run `npm install puppeteer-extra puppeteer-extra-plugin-stealth puppeteer` there: %w", baseDir, err)
 	}
 
 	return nil
@@ -98,11 +151,16 @@ func extractM3U8Lite(embedURL string, log func(string)) (string, map[string]stri
 		return "", nil, errors.New("empty embed URL")
 	}
 
-	if err := ensurePuppeteerAvailable(); err != nil {
+	baseDir, err := findNodeModuleBase()
+	if err != nil {
 		return "", nil, err
 	}
 
-	runnerPath, err := writePuppeteerRunner()
+	if err := ensurePuppeteerAvailable(baseDir); err != nil {
+		return "", nil, err
+	}
+
+	runnerPath, err := writePuppeteerRunner(baseDir)
 	if err != nil {
 		return "", nil, err
 	}
@@ -111,6 +169,8 @@ func extractM3U8Lite(embedURL string, log func(string)) (string, map[string]stri
 	log(fmt.Sprintf("[puppeteer] launching chromium stealth runner for %s", embedURL))
 
 	cmd := exec.Command("node", runnerPath, embedURL)
+	cmd.Dir = baseDir
+	cmd.Env = append(os.Environ(), fmt.Sprintf("STREAMED_TUI_NODE_BASE=%s", baseDir))
 	stdout := &logBuffer{buf: &bytes.Buffer{}, log: func(line string) { log(line) }, prefix: "[puppeteer stdout] "}
 	stderr := &logBuffer{buf: &bytes.Buffer{}, log: func(line string) { log(line) }, prefix: "[puppeteer stderr] "}
 	cmd.Stdout = stdout
@@ -141,9 +201,10 @@ func extractM3U8Lite(embedURL string, log func(string)) (string, map[string]stri
 // writePuppeteerRunner materializes a temporary Node.js script that performs
 // the actual page load and .m3u8 discovery with puppeteer-extra stealth
 // protections.
-func writePuppeteerRunner() (string, error) {
+func writePuppeteerRunner(baseDir string) (string, error) {
 	script := `const { createRequire } = require('module');
-const requireFromCwd = createRequire(process.cwd() + '/');
+const base = process.env.STREAMED_TUI_NODE_BASE || process.cwd();
+const requireFromCwd = createRequire(base.endsWith('/') ? base : base + '/');
 
 let puppeteer;
 let StealthPlugin;
