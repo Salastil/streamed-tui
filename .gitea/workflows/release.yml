@@ -68,13 +68,13 @@ jobs:
       - name: Ensure release exists (create if missing)
         id: create_release
         env:
-          GITEA_TOKEN: ${{ secrets.CI_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.CI_TOKEN2 }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
           API_BASE: ${{ env.API_BASE }}
         run: |
           if [ -z "$GITEA_TOKEN" ]; then
-            echo "ERROR: Missing CI_TOKEN secret"
+            echo "ERROR: Missing CI_TOKEN2 secret"
             exit 1
           fi
 
@@ -139,7 +139,7 @@ jobs:
       # -------------------------------------------------------------
       - name: Upload binaries to Gitea release
         env:
-          GITEA_TOKEN: ${{ secrets.CI_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.CI_TOKEN2 }}
           RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
           API_BASE: ${{ env.API_BASE }}
           REPO: ${{ github.repository }}
