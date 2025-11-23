@@ -59,7 +59,7 @@ func (h helpKeyMap) ShortHelp() []key.Binding {
 	if h.showMPV {
 		bindings = append(bindings, h.base.OpenMPV)
 	}
-	bindings = append(bindings, h.base.Quit)
+	bindings = append(bindings, h.base.Help, h.base.Quit)
 	return bindings
 }
 
