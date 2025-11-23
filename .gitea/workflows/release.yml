@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  release:
-    types: [published]
 
 permissions:
   contents: write
@@ -19,96 +17,143 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # -------------------------------------------------------------
+      # Checkout
+      # -------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # -------------------------------------------------------------
+      # Setup Go
+      # -------------------------------------------------------------
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      - name: Build Puppeteer bundle
+      # -------------------------------------------------------------
+      # Bundle Node Modules (important for puppeteer-extra)
+      # -------------------------------------------------------------
+      - name: Bundle node_modules for extractor
         run: |
           chmod +x scripts/build_node_modules.sh
-          scripts/build_node_modules.sh
+          ./scripts/build_node_modules.sh
 
-      - name: Build platform binaries
+      # -------------------------------------------------------------
+      # Build all platform binaries
+      # -------------------------------------------------------------
+      - name: Build all platform binaries
         run: |
           mkdir -p dist
 
           build() {
-            GOOS="$1"
-            GOARCH="$2"
-            EXT="$3"
-            OUT="streamed-tui_${GOOS}_${GOARCH}${EXT}"
-            echo "Building ${OUT}"
-            env GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 go build -o dist/${OUT} .
+            GOOS=$1
+            GOARCH=$2
+            SUFFIX=$3
+            OUT="${BINARY_NAME}${SUFFIX}"
+
+            echo "Building: GOOS=$1 GOARCH=$2 OUTPUT=$OUT"
+            env GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -o "dist/$OUT" .
           }
 
-          build linux amd64 ""
-          build linux arm64 ""
-          build darwin amd64 ""
-          build darwin arm64 ""
+          build linux   amd64  ""
+          build linux   arm64  ""
+          build darwin  amd64  ""
+          build darwin  arm64  ""
 
-      - name: Create source tarball
-        run: |
-          mkdir -p dist
-          git archive --format=tar.gz -o dist/streamed-tui_${GITHUB_REF_NAME}_source.tar.gz HEAD
-
+      # -------------------------------------------------------------
+      # Create or fetch the Gitea release
+      # -------------------------------------------------------------
       - name: Ensure release exists (create if missing)
-        id: ensure_release
+        id: create_release
         env:
           GITEA_TOKEN: ${{ secrets.CI_TOKEN }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
           API_BASE: ${{ env.API_BASE }}
         run: |
-          echo "Checking if release exists: $TAG"
-
-          EXISTING=$(curl -s -H "Authorization: token ${GITEA_TOKEN}" \
-            "${API_BASE}/repos/${REPO}/releases/tags/${TAG}")
-
-          RELEASE_ID=$(echo "$EXISTING" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*' || true)
-
-          if [ -z "$RELEASE_ID" ]; then
-            echo "Release does not exist — creating"
-            RESPONSE=$(curl -s -X POST \
-              -H "Authorization: token ${GITEA_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d "{\"tag_name\":\"${TAG}\",\"name\":\"Release ${TAG}\",\"draft\":false}" \
-              "${API_BASE}/repos/${REPO}/releases")
-
-            RELEASE_ID=$(echo "$RESPONSE" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
-          else
-            echo "Release already exists: $RELEASE_ID"
-          fi
-
-          if [ -z "$RELEASE_ID" ]; then
-            echo "Failed to create or fetch release"
+          if [ -z "$GITEA_TOKEN" ]; then
+            echo "ERROR: Missing CI_TOKEN secret"
             exit 1
           fi
 
+          echo "Checking if release exists: $TAG"
+
+          EXISTING=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            "${API_BASE}/repos/${REPO}/releases/tags/${TAG}")
+
+          if [ "$EXISTING" = "200" ]; then
+            echo "Release already exists — fetching ID"
+            BODY=$(curl -s \
+              -H "Authorization: token ${GITEA_TOKEN}" \
+              "${API_BASE}/repos/${REPO}/releases/tags/${TAG}")
+
+            RELEASE_ID=$(echo "$BODY" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+            echo "Found release ID: $RELEASE_ID"
+
+            echo "release_id=${RELEASE_ID}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Release does not exist — creating"
+
+          # Create new release, capture body + status code
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"tag_name\": \"${TAG}\",
+              \"name\": \"Release ${TAG}\",
+              \"body\": \"Automated release ${TAG}\",
+              \"draft\": false,
+              \"prerelease\": false
+            }" \
+            "${API_BASE}/repos/${REPO}/releases")
+
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          CODE=$(echo "$RESPONSE" | tail -n1)
+
+          echo "Gitea API Response Code: $CODE"
+          echo "Gitea API Response Body:"
+          echo "$BODY"
+
+          if [ "$CODE" -ne 201 ] && [ "$CODE" -ne 200 ]; then
+            echo "ERROR: Release creation failed"
+            exit 1
+          fi
+
+          RELEASE_ID=$(echo "$BODY" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+
+          if [ -z "$RELEASE_ID" ]; then
+            echo "ERROR: Could not extract release ID"
+            exit 1
+          fi
+
+          echo "Created release ID: $RELEASE_ID"
           echo "release_id=${RELEASE_ID}" >> $GITHUB_OUTPUT
 
-      - name: Upload release assets
+      # -------------------------------------------------------------
+      # Upload binaries
+      # -------------------------------------------------------------
+      - name: Upload binaries to Gitea release
         env:
           GITEA_TOKEN: ${{ secrets.CI_TOKEN }}
-          RELEASE_ID: ${{ steps.ensure_release.outputs.release_id }}
+          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
           API_BASE: ${{ env.API_BASE }}
           REPO: ${{ github.repository }}
         run: |
-          echo "Uploading assets to release ${RELEASE_ID}"
+          cd dist
+          echo "Uploading binaries..."
 
-          for file in dist/*; do
-            name=$(basename "$file")
-            echo "Uploading $name..."
+          for file in *; do
+            echo "Uploading $file"
             curl -s -X POST \
               -H "Authorization: token ${GITEA_TOKEN}" \
               -H "Content-Type: application/octet-stream" \
               --data-binary @"$file" \
-              "${API_BASE}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${name}"
-            echo ""
+              "${API_BASE}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=$file"
           done
 
-          echo "All assets uploaded."
+          echo "All binaries uploaded successfully."
