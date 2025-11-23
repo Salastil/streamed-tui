@@ -209,16 +209,59 @@ function installTouchAndWindowSpoofing(page) {
   });
 
   let captured = null;
+  let resolveCapture;
   const capturePromise = new Promise(resolve => {
-    page.on('request', req => {
-      const url = req.url();
-      if (!captured && url.includes('.m3u8')) {
-        const headers = req.headers();
-        captured = { url, headers };
-        console.log('[puppeteer] found .m3u8 request: ' + url);
-        resolve();
+    resolveCapture = resolve;
+  });
+
+  function findNestedPlaylist(body, baseUrl) {
+    if (!body) return '';
+    const lines = body.split(/\r?\n/);
+    for (const rawLine of lines) {
+      const line = (rawLine || '').trim();
+      if (!line || line.startsWith('#')) continue;
+      if (line.toLowerCase().includes('.m3u8')) {
+        try {
+          return new URL(line, baseUrl).toString();
+        } catch (_) {
+          return line;
+        }
       }
-    });
+    }
+    return '';
+  }
+
+  async function handleM3U8Response(res) {
+    const url = res.url();
+    const headers = res.request().headers();
+    let body = '';
+    try {
+      body = await res.text();
+    } catch (err) {
+      console.log('[puppeteer] failed to read m3u8 body for ' + url + ': ' + err.message);
+    }
+
+    const hasExtinf = body && body.includes('#EXTINF');
+    const nested = findNestedPlaylist(body, url);
+    let finalUrl = url;
+    let reason = 'first seen';
+    if (hasExtinf) {
+      reason = 'contains #EXTINF segments';
+    } else if (nested) {
+      finalUrl = nested;
+      reason = 'nested m3u8 discovered in response body';
+    }
+
+    if (!captured || hasExtinf) {
+      captured = { url: finalUrl, headers, hasExtinf };
+      console.log('[puppeteer] captured .m3u8 (' + reason + '): ' + finalUrl);
+      if (resolveCapture) resolveCapture();
+    }
+  }
+
+  page.on('response', res => {
+    if (!res.url().includes('.m3u8')) return;
+    handleM3U8Response(res);
   });
 
   try {
