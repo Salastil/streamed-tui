@@ -107,13 +107,13 @@ type Model struct {
 // ENTRY POINT
 // ────────────────────────────────
 
-func Run() error {
-	p := tea.NewProgram(New(), tea.WithAltScreen())
+func Run(debug bool) error {
+	p := tea.NewProgram(New(debug), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
 
-func New() Model {
+func New(debug bool) Model {
 	base := BaseURLFromEnv()
 	client := NewClient(base, 15*time.Second)
 	styles := NewStyles()
@@ -126,6 +126,10 @@ func New() Model {
 		focus:       focusSports,
 		currentView: viewMain,
 		debugLines:  []string{},
+	}
+
+	if debug {
+		m.currentView = viewDebug
 	}
 
 	m.sports = NewListColumn[Sport]("Sports", func(s Sport) string { return s.Name })
@@ -452,7 +456,7 @@ func (m Model) runExtractor(st Stream) tea.Cmd {
 			}
 		}
 
-		logcb(fmt.Sprintf("[extractor] Starting Chrome-based extractor for %s", st.EmbedURL))
+		logcb(fmt.Sprintf("[extractor] Starting puppeteer extractor for %s", st.EmbedURL))
 
 		m3u8, hdrs, err := extractM3U8Lite(st.EmbedURL, func(line string) {
 			m.debugLines = append(m.debugLines, line)
@@ -467,7 +471,7 @@ func (m Model) runExtractor(st Stream) tea.Cmd {
 			logcb(fmt.Sprintf("[extractor] Captured %d headers", len(hdrs)))
 		}
 
-		if err := LaunchMPVWithHeaders(m3u8, hdrs, logcb); err != nil {
+		if err := LaunchMPVWithHeaders(m3u8, hdrs, logcb, false); err != nil {
 			logcb(fmt.Sprintf("[mpv] ❌ %v", err))
 			return debugLogMsg(fmt.Sprintf("MPV error: %v", err))
 		}

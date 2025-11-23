@@ -22,8 +22,8 @@ type Styles struct {
 func NewStyles() Styles {
 	border := lipgloss.RoundedBorder()
 	return Styles{
-		Title:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
-		Box:    lipgloss.NewStyle().Border(border).Padding(0, 1).MarginRight(1),
+		Title: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")),
+		Box:   lipgloss.NewStyle().Border(border).Padding(0, 1).MarginRight(1),
 		Active: lipgloss.NewStyle().
 			Border(border).
 			BorderForeground(lipgloss.Color("#FA8072")). // Not pink, its Salmon obviously
@@ -71,7 +71,11 @@ func (c *ListColumn[T]) SetWidth(w int) {
 	c.width = w - 4
 }
 
-func (c *ListColumn[T]) SetHeight(h int)       { if h > 5 { c.height = h - 5 } }
+func (c *ListColumn[T]) SetHeight(h int) {
+	if h > 5 {
+		c.height = h - 5
+	}
+}
 
 func (c *ListColumn[T]) CursorUp() {
 	if c.selected > 0 {
@@ -116,22 +120,22 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 		if end > len(c.items) {
 			end = len(c.items)
 		}
-	for i := start; i < end; i++ {
-		cursor := "  "
-		lineText := c.render(c.items[i])
-		if i == c.selected {
-			cursor = "▸ "
-			lineText = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#FA8072")). // Not pink, its Salmon obviously
-				Bold(true).
-				Render(lineText)
+		for i := start; i < end; i++ {
+			cursor := "  "
+			lineText := c.render(c.items[i])
+			if i == c.selected {
+				cursor = "▸ "
+				lineText = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#FA8072")). // Not pink, its Salmon obviously
+					Bold(true).
+					Render(lineText)
+			}
+			line := fmt.Sprintf("%s%s", cursor, lineText)
+			if len(line) > c.width && c.width > 3 {
+				line = line[:c.width-3] + "…"
+			}
+			lines = append(lines, line)
 		}
-		line := fmt.Sprintf("%s%s", cursor, lineText)
-		if len(line) > c.width && c.width > 3 {
-			line = line[:c.width-3] + "…"
-		}
-		lines = append(lines, line)
-	}
 	}
 
 	// Fill remaining lines if fewer than height
