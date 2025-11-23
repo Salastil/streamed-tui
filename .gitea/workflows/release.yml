@@ -1,8 +1,6 @@
 name: Build Release Binaries
 
 on:
-  release:
-    types: [published]
   push:
     tags:
       - "v*"
@@ -13,6 +11,7 @@ permissions:
 env:
   BINARY_NAME: streamed-tui
   API_BASE: https://git.salastil.com/api/v1
+  GITEA_ENV: gitea.env
 
 jobs:
   build-and-release:
@@ -28,88 +27,121 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Bundle Node.js dependencies
+      #######################################################
+      # 1. Bundle puppeteer-extra + stealth plugin
+      #######################################################
+      - name: Bundle extractor node_modules
         run: |
-          bash scripts/build_node_modules.sh
+          chmod +x ./scripts/build_node_modules.sh
+          ./scripts/build_node_modules.sh
 
-      - name: Build all platform binaries
+      #######################################################
+      # 2. Build all platform binaries
+      #######################################################
+      - name: Build binaries
         run: |
           mkdir -p dist
 
           build() {
-            GOOS=$1
-            GOARCH=$2
-            EXT=$3
-            OUT="${BINARY_NAME}_${GOOS}_${GOARCH}${EXT}"
-            echo "Building $GOOS $GOARCH => $OUT"
-            env GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -o "dist/${OUT}" .
+            GOOS="$1" GOARCH="$2"
+            OUT="${BINARY_NAME}_${1}_${2}"
+            echo "Building $1 $2 => $OUT"
+
+            env \
+              GOOS="$1" \
+              GOARCH="$2" \
+              CGO_ENABLED=0 \
+              go build -o "dist/${OUT}" .
           }
 
-          build linux  amd64 ""
-          build linux  arm64 ""
-          build darwin amd64 ""
-          build darwin arm64 ""
+          build linux  amd64
+          build linux  arm64
+          build darwin amd64
+          build darwin arm64
 
-      - name: Create release in Gitea
-        id: create_release
+      #######################################################
+      # 3. Check if release exists → create if needed
+      #######################################################
+      - name: Ensure release exists
+        id: ensure_release
         env:
           GITEA_TOKEN: ${{ secrets.CI_TOKEN }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
-          if [ -z "$GITEA_TOKEN" ]; then
-            echo "ERROR: Missing CI_TOKEN secret"
-            exit 1
-          fi
+          set -e
 
           echo "Checking if release exists: $TAG"
 
-          # Check release existence
-          CHECK=$(curl -s -o /dev/null -w "%{http_code}" \
+          # Query
+          STATUS=$(curl -s -o resp.json -w "%{http_code}" \
             -H "Authorization: token ${GITEA_TOKEN}" \
-            "${{ env.API_BASE }}/repos/${REPO}/releases/tags/${TAG}")
+            "${API_BASE}/repos/${REPO}/releases/tags/${TAG}")
 
-          if [ "$CHECK" = "200" ]; then
+          if [ "$STATUS" = "200" ]; then
             echo "Release already exists."
-            RELEASE_ID=$(curl -s \
-              -H "Authorization: token ${GITEA_TOKEN}" \
-              "${{ env.API_BASE }}/repos/${REPO}/releases/tags/${TAG}" | \
-              grep -o '"id":[0-9]*' | grep -o '[0-9]*')
+            RELEASE_ID=$(jq -r '.id' resp.json)
           else
             echo "Release does not exist — creating"
-            RESPONSE=$(curl -s -X POST \
+            CREATE=$(curl -s -o create.json -w "%{http_code}" \
+              -X POST \
               -H "Authorization: token ${GITEA_TOKEN}" \
               -H "Content-Type: application/json" \
               -d "{
                 \"tag_name\": \"${TAG}\",
-                \"name\": \"Release ${TAG}\",
+                \"name\": \"${TAG}\",
                 \"body\": \"Automated release ${TAG}\",
                 \"draft\": false,
                 \"prerelease\": false
               }" \
-              "${{ env.API_BASE }}/repos/${REPO}/releases")
+              "${API_BASE}/repos/${REPO}/releases")
 
-            RELEASE_ID=$(echo "$RESPONSE" | grep -o '"id":[0-9]*' | grep -o '[0-9]*')
+            echo "Gitea API Response Code: $CREATE"
+
+            RELEASE_ID=$(jq -r '.id' create.json)
+            echo "New release id: $RELEASE_ID"
           fi
 
-          echo "release_id=${RELEASE_ID}" >> $GITHUB_OUTPUT
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
+            echo "ERROR: Could not determine release ID"
+            exit 1
+          fi
 
-      - name: Upload release assets
+          # Write to environment file (Gitea-compatible)
+          echo "RELEASE_ID=${RELEASE_ID}" >> "$GITEA_ENV"
+
+      #######################################################
+      # 4. Load RELEASE_ID into environment (Gitea-compatible)
+      #######################################################
+      - name: Load RELEASE_ID
+        run: |
+          if [ -f "$GITEA_ENV" ]; then
+            cat "$GITEA_ENV" >> "$GITHUB_ENV"
+            echo "Loaded RELEASE_ID=$RELEASE_ID"
+          else
+            echo "ERROR: gitea.env missing"
+            exit 1
+          fi
+
+      #######################################################
+      # 5. Upload all binaries as release assets
+      #######################################################
+      - name: Upload binaries to Gitea Release
         env:
           GITEA_TOKEN: ${{ secrets.CI_TOKEN }}
-          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
-          API_BASE: ${{ env.API_BASE }}
           REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ env.RELEASE_ID }}
         run: |
           echo "Uploading binaries..."
+          cd dist
 
-          for file in dist/*; do
-            echo "Uploading $file"
+          for file in *; do
+            echo "Uploading $file..."
             curl -s -X POST \
               -H "Authorization: token ${GITEA_TOKEN}" \
               -H "Content-Type: application/octet-stream" \
-              --data-binary @"$file" \
-              "${API_BASE}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=$(basename "$file")"
+              --data-binary @"${file}" \
+              "${API_BASE}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=${file}"
           done
 
-          echo "Done uploading release artifacts"
+          echo "Upload complete."
