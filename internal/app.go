@@ -310,7 +310,6 @@ func (m Model) renderHelpPanel() string {
 		{"Enter", "Select / Open"},
 		{"O", "Open in browser"},
 		{"P", "Open in mpv"},
-		{"Admin streams", "Browser-only because STREAMED obfuscates them"},
 		{"R", "Refresh"},
 		{"Q", "Quit"},
 		{"F1 / ?", "Toggle this help"},
@@ -322,7 +321,9 @@ func (m Model) renderHelpPanel() string {
 	for _, b := range bindings {
 		sb.WriteString(fmt.Sprintf("%-18s %s\n", b[0], b[1]))
 	}
-	sb.WriteString("\nPress Esc to return.")
+	sb.WriteString("\n")
+	sb.WriteString("Admin streams can only be opened in the browser because STREAMED obfuscates them\n\n")
+	sb.WriteString("Press Esc to return.")
 
 	panel := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
