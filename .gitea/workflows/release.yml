@@ -1,0 +1,125 @@
+name: Build Release Binaries
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  BINARY_NAME: streamed-tui
+  API_BASE: https://git.salastil.com/api/v1
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build all platform binaries
+        run: |
+          mkdir -p dist
+
+          build() {
+            GOOS=$1 GOARCH=$2 EXT=$3
+            OUT="${BINARY_NAME}${EXT}"
+            echo "Building $1 $2 => $OUT"
+            env GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -o "dist/${OUT}" .
+          }
+
+          build linux   amd64  ""
+          build linux   arm64  ""
+          build darwin  amd64  ""
+          build darwin  arm64  ""
+
+      - name: Package binaries
+        run: |
+          cd dist
+
+          pack() {
+            NAME="$1"
+            EXT="$2"
+
+            if [[ "$EXT" == "zip" ]]; then
+              zip "${NAME}.zip" "${BINARY_NAME}${3}"
+            else
+              tar -czf "${NAME}.tar.gz" "${BINARY_NAME}${3}"
+            fi
+          }
+
+          pack streamed-tui_linux_amd64 tar.gz ""
+          pack streamed-tui_linux_arm64 tar.gz ""
+          pack streamed-tui_darwin_amd64 tar.gz ""
+          pack streamed-tui_darwin_arm64 tar.gz ""
+
+      - name: Create release in Gitea
+        id: create_release
+        env:
+          GITEA_TOKEN: ${{ secrets.CI_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          API_BASE: ${{ env.API_BASE }}
+        run: |
+          if [ -z "$GITEA_TOKEN" ]; then
+            echo "ERROR: Missing CI_TOKEN secret"
+            exit 1
+          fi
+
+          echo "Creating release for tag: $TAG"
+
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"tag_name\": \"${TAG}\",
+              \"name\": \"Release ${TAG}\",
+              \"body\": \"Automated release for ${TAG}\",
+              \"draft\": false,
+              \"prerelease\": false
+            }" \
+            "${API_BASE}/repos/${REPO}/releases")
+
+          echo "RESPONSE=$RESPONSE"
+
+          RELEASE_ID=$(echo "$RESPONSE" | grep -o '"id":[0-9]*' | head -1 | grep -o '[0-9]*')
+          echo "Release ID: $RELEASE_ID"
+
+          if [ -z "$RELEASE_ID" ]; then
+            echo "ERROR: Failed to extract release ID"
+            exit 1
+          fi
+
+          echo "release_id=${RELEASE_ID}" >> $GITHUB_OUTPUT
+
+      - name: Upload release assets
+        env:
+          GITEA_TOKEN: ${{ secrets.CI_TOKEN }}
+          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
+          API_BASE: ${{ env.API_BASE }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Uploading assets..."
+          cd dist
+
+          for file in *; do
+            echo "Uploading $file..."
+            curl -s -X POST \
+              -H "Authorization: token ${GITEA_TOKEN}" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$file" \
+              "${API_BASE}/repos/${REPO}/releases/${RELEASE_ID}/assets?name=$file"
+          done
+
+          echo "All assets uploaded."

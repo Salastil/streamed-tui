@@ -1,0 +1,82 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  BINARY_NAME: streamed-tui
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # -------------------------------------------------
+      # Build node_modules bundle for puppeteer-extra
+      # -------------------------------------------------
+      - name: Build node_modules archive
+        run: |
+          chmod +x scripts/build_node_modules.sh
+          ./scripts/build_node_modules.sh
+
+      # -------------------------------------------------
+      # Compile all platform binaries
+      # -------------------------------------------------
+      - name: Build binaries
+        run: |
+          mkdir -p out
+          GOOS=linux  GOARCH=amd64 CGO_ENABLED=0 go build -o out/${BINARY_NAME}_linux_amd64 .
+          GOOS=linux  GOARCH=arm64 CGO_ENABLED=0 go build -o out/${BINARY_NAME}_linux_arm64 .
+          GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o out/${BINARY_NAME}_darwin_amd64 .
+          GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o out/${BINARY_NAME}_darwin_arm64 .
+
+      # -------------------------------------------------
+      # Create source code bundle for this version
+      # -------------------------------------------------
+      - name: Create source tarball
+        run: |
+          mkdir -p release
+          tar -czf release/${BINARY_NAME}_${GITHUB_REF_NAME}_source.tar.gz .
+
+      # -------------------------------------------------
+      # Install GitHub CLI
+      # -------------------------------------------------
+      - name: Install GitHub CLI
+        run: sudo apt-get install -y gh
+
+      # -------------------------------------------------
+      # Create Release + upload binaries and source
+      # -------------------------------------------------
+      - name: Create Release and Upload Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+
+          # Remove old release if re-tagged
+          gh release delete "$TAG" --yes --cleanup-tag || true
+
+          # Create release and upload all assets
+          gh release create "$TAG" \
+            out/${BINARY_NAME}_linux_amd64 \
+            out/${BINARY_NAME}_linux_arm64 \
+            out/${BINARY_NAME}_darwin_amd64 \
+            out/${BINARY_NAME}_darwin_arm64 \
+            release/${BINARY_NAME}_${TAG}_source.tar.gz \
+            --title "$TAG" \
+            --notes "Release $TAG" \
+            --latest
