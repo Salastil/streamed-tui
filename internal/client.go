@@ -62,6 +62,8 @@ type Match struct {
 		Source string `json:"source"`
 		ID     string `json:"id"`
 	} `json:"sources"`
+
+	Viewers int `json:"viewers"`
 }
 
 type Stream struct {
@@ -71,6 +73,7 @@ type Stream struct {
 	HD       bool   `json:"hd"`
 	EmbedURL string `json:"embedUrl"`
 	Source   string `json:"source"`
+	Viewers  int    `json:"viewers"`
 }
 
 // ────────────────────────────────
@@ -88,12 +91,73 @@ func (c *Client) GetSports(ctx context.Context) ([]Sport, error) {
 
 func (c *Client) GetPopularMatches(ctx context.Context) ([]Match, error) {
 	url := c.base + "/api/matches/all/popular"
-	return c.getMatches(ctx, url)
+	matches, err := c.getMatches(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+
+	viewCounts, err := c.GetPopularViewCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range matches {
+		// Prefer a direct match on the match ID.
+		if viewers, ok := viewCounts.ByMatchID[matches[i].ID]; ok {
+			matches[i].Viewers = viewers
+			continue
+		}
+
+		// Fallback: some IDs can differ between endpoints, so also try source IDs.
+		for _, src := range matches[i].Sources {
+			if viewers, ok := viewCounts.BySourceID[src.ID]; ok {
+				matches[i].Viewers = viewers
+				break
+			}
+		}
+	}
+
+	return matches, nil
 }
 
 func (c *Client) GetMatchesBySport(ctx context.Context, sportID string) ([]Match, error) {
 	url := fmt.Sprintf("%s/api/matches/%s", c.base, sportID)
 	return c.getMatches(ctx, url)
+}
+
+type PopularViewCounts struct {
+	ByMatchID  map[string]int
+	BySourceID map[string]int
+}
+
+func (c *Client) GetPopularViewCounts(ctx context.Context) (PopularViewCounts, error) {
+	url := "https://streami.su/api/matches/live/popular-viewcount"
+
+	var payload []struct {
+		ID      string `json:"id"`
+		Viewers int    `json:"viewers"`
+		Sources []struct {
+			ID string `json:"id"`
+		} `json:"sources"`
+	}
+
+	if err := c.get(ctx, url, &payload); err != nil {
+		return PopularViewCounts{}, err
+	}
+
+	matchMap := make(map[string]int, len(payload))
+	sourceMap := make(map[string]int, len(payload))
+	for _, item := range payload {
+		matchMap[item.ID] = item.Viewers
+		for _, src := range item.Sources {
+			if src.ID == "" {
+				continue
+			}
+			sourceMap[src.ID] = item.Viewers
+		}
+	}
+
+	return PopularViewCounts{ByMatchID: matchMap, BySourceID: sourceMap}, nil
 }
 
 func (c *Client) GetStreamsForMatch(ctx context.Context, mt Match) ([]Stream, error) {

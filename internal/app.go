@@ -20,7 +20,12 @@ type keyMap struct {
 	Up, Down, Left, Right key.Binding
 	Enter, Quit, Refresh  key.Binding
 	OpenBrowser, OpenMPV  key.Binding
-	Help, Debug           key.Binding
+	Help                  key.Binding
+}
+
+type helpKeyMap struct {
+	base    keyMap
+	showMPV bool
 }
 
 func defaultKeys() keyMap {
@@ -35,7 +40,6 @@ func defaultKeys() keyMap {
 		Quit:        key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Refresh:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		Help:        key.NewBinding(key.WithKeys("f1", "?"), key.WithHelp("F1/?", "toggle help")),
-		Debug:       key.NewBinding(key.WithKeys("f12"), key.WithHelp("F12", "debug panel")),
 	}
 }
 
@@ -46,7 +50,29 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Left, k.Right},
-		{k.Enter, k.OpenBrowser, k.OpenMPV, k.Refresh, k.Help, k.Debug, k.Quit},
+		{k.Enter, k.OpenBrowser, k.OpenMPV, k.Refresh, k.Help, k.Quit},
+	}
+}
+
+func (h helpKeyMap) ShortHelp() []key.Binding {
+	bindings := []key.Binding{h.base.Up, h.base.Down, h.base.Left, h.base.Right, h.base.Enter, h.base.OpenBrowser}
+	if h.showMPV {
+		bindings = append(bindings, h.base.OpenMPV)
+	}
+	bindings = append(bindings, h.base.Help, h.base.Quit)
+	return bindings
+}
+
+func (h helpKeyMap) FullHelp() [][]key.Binding {
+	row2 := []key.Binding{h.base.Enter, h.base.OpenBrowser}
+	if h.showMPV {
+		row2 = append(row2, h.base.OpenMPV)
+	}
+	row2 = append(row2, h.base.Refresh, h.base.Help, h.base.Quit)
+
+	return [][]key.Binding{
+		{h.base.Up, h.base.Down, h.base.Left, h.base.Right},
+		row2,
 	}
 }
 
@@ -78,8 +104,44 @@ const (
 const (
 	viewMain viewMode = iota
 	viewHelp
-	viewDebug
 )
+
+func formatViewerCount(count int) string {
+	if count >= 1_000_000 {
+		value := float64(count) / 1_000_000
+		formatted := fmt.Sprintf("%.1f", value)
+		formatted = strings.TrimSuffix(formatted, ".0")
+		return formatted + "m"
+	}
+
+	if count >= 1000 {
+		value := float64(count) / 1000
+		formatted := fmt.Sprintf("%.1f", value)
+		formatted = strings.TrimSuffix(formatted, ".0")
+		return formatted + "k"
+	}
+
+	return fmt.Sprintf("%d", count)
+}
+
+func reorderStreams(streams []Stream) []Stream {
+	if len(streams) == 0 {
+		return streams
+	}
+
+	regular := make([]Stream, 0, len(streams))
+	admin := make([]Stream, 0)
+
+	for _, st := range streams {
+		if strings.EqualFold(st.Source, "admin") {
+			admin = append(admin, st)
+			continue
+		}
+		regular = append(regular, st)
+	}
+
+	return append(regular, admin...)
+}
 
 // ────────────────────────────────
 // MODEL
@@ -129,7 +191,7 @@ func New(debug bool) Model {
 	}
 
 	if debug {
-		m.currentView = viewDebug
+		m.debugLines = append(m.debugLines, "(debug logging enabled)")
 	}
 
 	m.sports = NewListColumn[Sport]("Sports", func(s Sport) string { return s.Name })
@@ -139,17 +201,44 @@ func New(debug bool) Model {
 		if mt.Teams != nil && mt.Teams.Home != nil && mt.Teams.Away != nil {
 			title = fmt.Sprintf("%s vs %s", mt.Teams.Home.Name, mt.Teams.Away.Name)
 		}
-		return fmt.Sprintf("%s  %s  (%s)", when, title, mt.Category)
+
+		viewers := ""
+		if mt.Viewers > 0 {
+			viewers = fmt.Sprintf(" (%s viewers)", formatViewerCount(mt.Viewers))
+		}
+
+		return fmt.Sprintf("%s  %s%s (%s)", when, title, viewers, mt.Category)
+	})
+	m.matches.SetSeparator(func(prev, curr Match) (string, bool) {
+		currDay := time.UnixMilli(curr.Date).Local().Format("Jan 2")
+		prevDay := ""
+		if prev.Date != 0 {
+			prevDay = time.UnixMilli(prev.Date).Local().Format("Jan 2")
+		}
+
+		if prevDay == "" || prevDay != currDay {
+			return currDay, true
+		}
+		return "", false
 	})
 	m.streams = NewListColumn[Stream]("Streams", func(st Stream) string {
 		quality := "SD"
 		if st.HD {
 			quality = "HD"
 		}
-		return fmt.Sprintf("#%d %s (%s) – %s", st.StreamNo, st.Language, quality, st.Source)
+		viewers := formatViewerCount(st.Viewers)
+		return fmt.Sprintf("#%d %s (%s) – %s — (%s viewers)", st.StreamNo, st.Language, quality, st.Source, viewers)
+	})
+	m.streams.SetSeparator(func(prev, curr Stream) (string, bool) {
+		isAdmin := strings.EqualFold(curr.Source, "admin")
+		wasAdmin := strings.EqualFold(prev.Source, "admin")
+		if isAdmin && !wasAdmin {
+			return "Browser Only", true
+		}
+		return "", false
 	})
 
-	m.status = fmt.Sprintf("Using API %s | Loading…", base)
+	m.status = fmt.Sprintf("Using API %s | Loading sports and matches…", base)
 	return m
 }
 
@@ -165,25 +254,52 @@ func (m Model) View() string {
 	switch m.currentView {
 	case viewHelp:
 		return m.renderHelpPanel()
-	case viewDebug:
-		return m.renderDebugPanel()
 	default:
 		return m.renderMainView()
 	}
 }
 
 func (m Model) renderMainView() string {
-	cols := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		m.sports.View(m.styles, m.focus == focusSports),
-		m.matches.View(m.styles, m.focus == focusMatches),
-		m.streams.View(m.styles, m.focus == focusStreams),
-	)
-	status := m.styles.Status.Render(m.status)
-	if m.lastError != nil {
-		status = m.styles.Error.Render(fmt.Sprintf("⚠️  %v", m.lastError))
+	gap := lipgloss.NewStyle().MarginRight(1)
+	sportsCol := gap.Render(m.sports.View(m.styles, m.focus == focusSports))
+	matchesCol := gap.Render(m.matches.View(m.styles, m.focus == focusMatches))
+	streamsCol := m.streams.View(m.styles, m.focus == focusStreams)
+
+	cols := lipgloss.JoinHorizontal(lipgloss.Top, sportsCol, matchesCol, streamsCol)
+	colsWidth := lipgloss.Width(cols)
+	debugPane := m.renderDebugPane(colsWidth)
+	status := m.renderStatusLine()
+	keys := helpKeyMap{base: m.keys, showMPV: m.canUseMPVShortcut()}
+	return lipgloss.JoinVertical(lipgloss.Left, cols, debugPane, status, m.help.View(keys))
+}
+
+func (m Model) canUseMPVShortcut() bool {
+	if st, ok := m.streams.Selected(); ok {
+		return !strings.EqualFold(st.Source, "admin")
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, cols, status, m.help.View(m.keys))
+	return true
+}
+
+func (m Model) renderStatusLine() string {
+	focusLabel := m.currentFocusLabel()
+	statusText := fmt.Sprintf("%s  | Focus: %s (←/→)", m.status, focusLabel)
+	if m.lastError != nil {
+		return m.styles.Error.Render(fmt.Sprintf("⚠️  %v  | Focus: %s (Esc to dismiss)", m.lastError, focusLabel))
+	}
+	return m.styles.Status.Render(statusText)
+}
+
+func (m Model) currentFocusLabel() string {
+	switch m.focus {
+	case focusSports:
+		return "Sports"
+	case focusMatches:
+		return "Matches"
+	case focusStreams:
+		return "Streams"
+	default:
+		return "Unknown"
+	}
 }
 
 func (m Model) renderHelpPanel() string {
@@ -197,7 +313,6 @@ func (m Model) renderHelpPanel() string {
 		{"R", "Refresh"},
 		{"Q", "Quit"},
 		{"F1 / ?", "Toggle this help"},
-		{"F12", "Show debug panel"},
 		{"Esc", "Return to main view"},
 	}
 
@@ -206,33 +321,49 @@ func (m Model) renderHelpPanel() string {
 	for _, b := range bindings {
 		sb.WriteString(fmt.Sprintf("%-18s %s\n", b[0], b[1]))
 	}
-	sb.WriteString("\nPress Esc to return.")
+	sb.WriteString("\n")
+	sb.WriteString("Admin streams can only be opened in the browser because STREAMED obfuscates them\n\n")
+	sb.WriteString("Press Esc to return.")
 
 	panel := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("#FA8072")).
 		Padding(1, 2).
-		Width(int(float64(m.TerminalWidth) * 0.97)).
+		Width(int(float64(m.TerminalWidth) * 0.95)).
 		Render(sb.String())
 
 	return panel
 }
 
-func (m Model) renderDebugPanel() string {
-	header := m.styles.Title.Render("Debug Output (F12 / Esc to close)")
+func (m Model) renderDebugPane(widthHint int) string {
+	header := m.styles.Title.Render("Debug log")
+	visibleLines := 4
 	if len(m.debugLines) == 0 {
-		m.debugLines = append(m.debugLines, "(no debug output yet)")
+		m.debugLines = append(m.debugLines, "(debug log empty)")
 	}
-	content := strings.Join(m.debugLines, "\n")
+	start := len(m.debugLines) - visibleLines
+	if start < 0 {
+		start = 0
+	}
+	lines := m.debugLines[start:]
+	for len(lines) < visibleLines {
+		lines = append(lines, "")
+	}
 
-	panel := lipgloss.NewStyle().
+	content := strings.Join(lines, "\n")
+	width := widthHint
+	if width == 0 {
+		width = int(float64(m.TerminalWidth) * 0.95)
+		if width == 0 {
+			width = 80
+		}
+	}
+
+	return lipgloss.NewStyle().
+		Width(width).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#FA8072")).
-		Padding(1, 2).
-		Width(int(float64(m.TerminalWidth) * 0.97)).
-		Render(header + "\n\n" + content)
-
-	return panel
+		Padding(0, 1).
+		Render(header + "\n" + content)
 }
 
 // ────────────────────────────────
@@ -251,17 +382,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.TerminalWidth = msg.Width
-		usableHeight := int(float64(msg.Height) * 0.9)
-		totalAvailableWidth := int(float64(msg.Width) * 0.97)
+		debugPaneHeight := 7
+		statusHeight := 1
+		helpHeight := 2
+		reservedHeight := debugPaneHeight + statusHeight + helpHeight
+		usableHeight := msg.Height - reservedHeight
+		if usableHeight < 5 {
+			usableHeight = 5
+		}
+		totalAvailableWidth := int(float64(msg.Width) * 0.95)
 		borderPadding := 4
 		totalBorderSpace := borderPadding * 3
 		availableWidth := totalAvailableWidth - totalBorderSpace
-		colWidth := availableWidth / 3
-		remainder := availableWidth % 3
 
-		m.sports.SetWidth(colWidth + borderPadding)
-		m.matches.SetWidth(colWidth + borderPadding)
-		m.streams.SetWidth(colWidth + remainder + borderPadding)
+		// Allocate widths with weights: Sports=3, Matches=10, Streams=5 (18 total)
+		// Streams gain an additional ~20% width by borrowing space from Matches.
+		weightTotal := 18
+		unit := availableWidth / weightTotal
+		remainder := availableWidth - (unit * weightTotal)
+
+		sportsWidth := unit * 3
+		matchesWidth := unit * 10
+		streamsWidth := unit * 5
+
+		// Assign any leftover pixels to the widest column (matches) to keep alignment.
+		matchesWidth += remainder
+
+		m.sports.SetWidth(sportsWidth + borderPadding)
+		m.matches.SetWidth(matchesWidth + borderPadding)
+		m.streams.SetWidth(streamsWidth + borderPadding)
 
 		m.sports.SetHeight(usableHeight)
 		m.matches.SetHeight(usableHeight)
@@ -279,14 +428,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentView = viewMain
 			} else {
 				m.currentView = viewHelp
-			}
-			return m, nil
-
-		case key.Matches(msg, m.keys.Debug):
-			if m.currentView == viewDebug {
-				m.currentView = viewMain
-			} else {
-				m.currentView = viewDebug
 			}
 			return m, nil
 		}
@@ -337,17 +478,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.focus {
 			case focusSports:
 				if sport, ok := m.sports.Selected(); ok {
+					m.lastError = nil
 					m.status = fmt.Sprintf("Loading matches for %s…", sport.Name)
 					m.streams.SetItems(nil)
 					return m, m.fetchMatchesForSport(sport)
 				}
 			case focusMatches:
 				if mt, ok := m.matches.Selected(); ok {
+					m.lastError = nil
 					m.status = fmt.Sprintf("Loading streams for %s…", mt.Title)
 					return m, m.fetchStreamsForMatch(mt)
 				}
 			case focusStreams:
 				if st, ok := m.streams.Selected(); ok {
+					if strings.EqualFold(st.Source, "admin") {
+						if st.EmbedURL != "" {
+							_ = openBrowser(st.EmbedURL)
+							m.lastError = nil
+							m.status = fmt.Sprintf("🌐 Opened in browser: %s", st.EmbedURL)
+						}
+						return m, nil
+					}
 					return m, tea.Batch(
 						m.logToUI(fmt.Sprintf("Attempting extractor for %s", st.EmbedURL)),
 						m.runExtractor(st),
@@ -360,6 +511,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == focusStreams {
 				if st, ok := m.streams.Selected(); ok && st.EmbedURL != "" {
 					_ = openBrowser(st.EmbedURL)
+					m.lastError = nil
 					m.status = fmt.Sprintf("🌐 Opened in browser: %s", st.EmbedURL)
 				}
 			}
@@ -368,28 +520,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case sportsLoadedMsg:
-		m.sports.SetItems(msg)
-		m.status = fmt.Sprintf("Loaded %d sports", len(msg))
+		sports := prependPopularSport(msg)
+		m.sports.SetItems(sports)
+		m.lastError = nil
+		m.status = fmt.Sprintf("Loaded %d sports – pick one with Enter or stay on Popular Matches", len(sports))
 		return m, nil
 
 	case matchesLoadedMsg:
 		m.matches.SetTitle(msg.Title)
 		m.matches.SetItems(msg.Matches)
-		m.status = fmt.Sprintf("Loaded %d matches", len(msg.Matches))
+		m.lastError = nil
+		m.status = fmt.Sprintf("Loaded %d matches – choose one to load streams", len(msg.Matches))
 		return m, nil
 
 	case streamsLoadedMsg:
 		m.streams.SetItems(msg)
-		m.status = fmt.Sprintf("Loaded %d streams", len(msg))
+		m.lastError = nil
+		m.status = fmt.Sprintf("Loaded %d streams – Enter to launch mpv, o to open in browser", len(msg))
 		m.focus = focusStreams
 		return m, nil
 
 	case launchStreamMsg:
+		m.lastError = nil
 		m.status = fmt.Sprintf("🎥 Launched mpv: %s", msg.URL)
 		return m, nil
 
 	case errorMsg:
 		m.lastError = msg
+		m.status = "Encountered an error while contacting the API"
 		return m, nil
 	}
 	return m, nil
@@ -421,12 +579,33 @@ func (m Model) fetchPopularMatches() tea.Cmd {
 
 func (m Model) fetchMatchesForSport(s Sport) tea.Cmd {
 	return func() tea.Msg {
-		matches, err := m.apiClient.GetMatchesBySport(context.Background(), s.ID)
+		get := func() ([]Match, error) {
+			if strings.EqualFold(s.ID, "popular") {
+				return m.apiClient.GetPopularMatches(context.Background())
+			}
+			return m.apiClient.GetMatchesBySport(context.Background(), s.ID)
+		}
+
+		matches, err := get()
 		if err != nil {
 			return errorMsg(err)
 		}
-		return matchesLoadedMsg{Matches: matches, Title: fmt.Sprintf("Matches (%s)", s.Name)}
+		title := fmt.Sprintf("Matches (%s)", s.Name)
+		if strings.EqualFold(s.ID, "popular") {
+			title = "Popular Matches"
+		}
+		return matchesLoadedMsg{Matches: matches, Title: title}
 	}
+}
+
+func prependPopularSport(sports []Sport) []Sport {
+	for _, s := range sports {
+		if strings.EqualFold(s.ID, "popular") || strings.EqualFold(s.Name, "popular") {
+			return sports
+		}
+	}
+	popular := Sport{ID: "popular", Name: "Popular"}
+	return append([]Sport{popular}, sports...)
 }
 
 func (m Model) fetchStreamsForMatch(mt Match) tea.Cmd {
@@ -435,7 +614,7 @@ func (m Model) fetchStreamsForMatch(mt Match) tea.Cmd {
 		if err != nil {
 			return errorMsg(err)
 		}
-		return streamsLoadedMsg(streams)
+		return streamsLoadedMsg(reorderStreams(streams))
 	}
 }
 
