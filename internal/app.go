@@ -201,7 +201,13 @@ func New(debug bool) Model {
 		if mt.Teams != nil && mt.Teams.Home != nil && mt.Teams.Away != nil {
 			title = fmt.Sprintf("%s vs %s", mt.Teams.Home.Name, mt.Teams.Away.Name)
 		}
-		return fmt.Sprintf("%s  %s  (%s)", when, title, mt.Category)
+
+		viewers := ""
+		if mt.Viewers > 0 {
+			viewers = fmt.Sprintf(" (%s viewers)", formatViewerCount(mt.Viewers))
+		}
+
+		return fmt.Sprintf("%s  %s%s (%s)", when, title, viewers, mt.Category)
 	})
 	m.matches.SetSeparator(func(prev, curr Match) (string, bool) {
 		currDay := time.UnixMilli(curr.Date).Local().Format("Jan 2")
@@ -513,9 +519,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case sportsLoadedMsg:
-		m.sports.SetItems(msg)
+		sports := prependPopularSport(msg)
+		m.sports.SetItems(sports)
 		m.lastError = nil
-		m.status = fmt.Sprintf("Loaded %d sports – pick one with Enter or stay on Popular Matches", len(msg))
+		m.status = fmt.Sprintf("Loaded %d sports – pick one with Enter or stay on Popular Matches", len(sports))
 		return m, nil
 
 	case matchesLoadedMsg:
@@ -571,12 +578,33 @@ func (m Model) fetchPopularMatches() tea.Cmd {
 
 func (m Model) fetchMatchesForSport(s Sport) tea.Cmd {
 	return func() tea.Msg {
-		matches, err := m.apiClient.GetMatchesBySport(context.Background(), s.ID)
+		get := func() ([]Match, error) {
+			if strings.EqualFold(s.ID, "popular") {
+				return m.apiClient.GetPopularMatches(context.Background())
+			}
+			return m.apiClient.GetMatchesBySport(context.Background(), s.ID)
+		}
+
+		matches, err := get()
 		if err != nil {
 			return errorMsg(err)
 		}
-		return matchesLoadedMsg{Matches: matches, Title: fmt.Sprintf("Matches (%s)", s.Name)}
+		title := fmt.Sprintf("Matches (%s)", s.Name)
+		if strings.EqualFold(s.ID, "popular") {
+			title = "Popular Matches"
+		}
+		return matchesLoadedMsg{Matches: matches, Title: title}
 	}
+}
+
+func prependPopularSport(sports []Sport) []Sport {
+	for _, s := range sports {
+		if strings.EqualFold(s.ID, "popular") || strings.EqualFold(s.Name, "popular") {
+			return sports
+		}
+	}
+	popular := Sport{ID: "popular", Name: "Popular"}
+	return append([]Sport{popular}, sports...)
 }
 
 func (m Model) fetchStreamsForMatch(mt Match) tea.Cmd {

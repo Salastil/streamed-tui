@@ -62,6 +62,8 @@ type Match struct {
 		Source string `json:"source"`
 		ID     string `json:"id"`
 	} `json:"sources"`
+
+	Viewers int `json:"viewers"`
 }
 
 type Stream struct {
@@ -89,12 +91,48 @@ func (c *Client) GetSports(ctx context.Context) ([]Sport, error) {
 
 func (c *Client) GetPopularMatches(ctx context.Context) ([]Match, error) {
 	url := c.base + "/api/matches/all/popular"
-	return c.getMatches(ctx, url)
+	matches, err := c.getMatches(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+
+	viewCounts, err := c.GetPopularViewCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range matches {
+		if viewers, ok := viewCounts[matches[i].ID]; ok {
+			matches[i].Viewers = viewers
+		}
+	}
+
+	return matches, nil
 }
 
 func (c *Client) GetMatchesBySport(ctx context.Context, sportID string) ([]Match, error) {
 	url := fmt.Sprintf("%s/api/matches/%s", c.base, sportID)
 	return c.getMatches(ctx, url)
+}
+
+func (c *Client) GetPopularViewCounts(ctx context.Context) (map[string]int, error) {
+	url := "https://streami.su/api/matches/live/popular-viewcount"
+
+	var payload []struct {
+		ID      string `json:"id"`
+		Viewers int    `json:"viewers"`
+	}
+
+	if err := c.get(ctx, url, &payload); err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]int, len(payload))
+	for _, item := range payload {
+		out[item.ID] = item.Viewers
+	}
+
+	return out, nil
 }
 
 func (c *Client) GetStreamsForMatch(ctx context.Context, mt Match) ([]Stream, error) {
