@@ -71,7 +71,11 @@ func findNodeModuleBase() (string, error) {
 		}
 	}
 
-	return "", errors.New("puppeteer-extra not found; install dependencies with npm in the project directory")
+	if extracted, err := ensureEmbeddedNodeModules(); err == nil {
+		return extracted, nil
+	}
+
+	return "", errors.New("puppeteer-extra not found; install dependencies with npm in the project directory or rebuild the embedded archive")
 }
 
 func (l *logBuffer) Write(p []byte) (int, error) {
@@ -134,7 +138,11 @@ func ensurePuppeteerAvailable(baseDir string) error {
 	check.Env = append(os.Environ(), fmt.Sprintf("STREAMED_TUI_NODE_BASE=%s", baseDir))
 
 	if err := check.Run(); err != nil {
-		return fmt.Errorf("puppeteer-extra or stealth plugin missing in %s. Run `npm install puppeteer-extra puppeteer-extra-plugin-stealth puppeteer` there: %w", baseDir, err)
+		if embedded, embErr := ensureEmbeddedNodeModules(); embErr == nil && embedded != baseDir {
+			return ensurePuppeteerAvailable(embedded)
+		}
+
+		return fmt.Errorf("puppeteer-extra or stealth plugin missing in %s. Run `npm install puppeteer-extra puppeteer-extra-plugin-stealth puppeteer` there or rebuild the embedded archive with scripts/build_node_modules.sh: %w", baseDir, err)
 	}
 
 	return nil
