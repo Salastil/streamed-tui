@@ -313,15 +313,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		totalBorderSpace := borderPadding * 3
 		availableWidth := totalAvailableWidth - totalBorderSpace
 
-		// Allocate widths with weights: Sports=3, Matches=11, Streams=4 (18 total)
-		// This enlarges the Streams column ~33% while trimming Matches to compensate.
-		weightTotal := 18
-		unit := availableWidth / weightTotal
-		remainder := availableWidth - (unit * weightTotal)
+                // Allocate widths with weights: Sports=3, Matches=10, Streams=5 (18 total)
+                // Streams gain an additional ~20% width by borrowing space from Matches.
+                weightTotal := 18
+                unit := availableWidth / weightTotal
+                remainder := availableWidth - (unit * weightTotal)
 
-		sportsWidth := unit * 3
-		matchesWidth := unit * 11
-		streamsWidth := unit * 4
+                sportsWidth := unit * 3
+                matchesWidth := unit * 10
+                streamsWidth := unit * 5
 
 		// Assign any leftover pixels to the widest column (matches) to keep alignment.
 		matchesWidth += remainder
