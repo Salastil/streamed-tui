@@ -56,6 +56,28 @@ func NewListColumn[T any](title string, r renderer[T]) *ListColumn[T] {
 	return &ListColumn[T]{title: title, render: r, width: 30, height: 20}
 }
 
+func truncateToWidth(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+
+	if lipgloss.Width(text) <= width {
+		return text
+	}
+
+	runes := []rune(text)
+	total := 0
+	for i, r := range runes {
+		rWidth := lipgloss.Width(string(r))
+		if total+rWidth > width {
+			return string(runes[:i])
+		}
+		total += rWidth
+	}
+
+	return text
+}
+
 func (c *ListColumn[T]) SetItems(items []T) {
 	c.items = items
 	c.selected = 0
@@ -132,6 +154,12 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 		for i := start; i < end; i++ {
 			cursor := "  "
 			lineText := c.render(c.items[i])
+
+			contentWidth := c.width - lipgloss.Width(cursor)
+			if contentWidth > 1 && lipgloss.Width(lineText) > contentWidth {
+				lineText = fmt.Sprintf("%s…", truncateToWidth(lineText, contentWidth-1))
+			}
+
 			if i == c.selected {
 				cursor = "▸ "
 				lineText = lipgloss.NewStyle().
@@ -139,10 +167,8 @@ func (c *ListColumn[T]) View(styles Styles, focused bool) string {
 					Bold(true).
 					Render(lineText)
 			}
+
 			line := fmt.Sprintf("%s%s", cursor, lineText)
-			if len(line) > c.width && c.width > 3 {
-				line = line[:c.width-3] + "…"
-			}
 			lines = append(lines, line)
 		}
 	}
