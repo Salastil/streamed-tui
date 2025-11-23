@@ -219,6 +219,7 @@ try {
 
 const embedURL = process.argv[2];
 const timeoutMs = 45000;
+const log = (...args) => console.error(...args);
 
 if (!embedURL) {
   console.error('missing embed URL');
@@ -252,7 +253,7 @@ function installTouchAndWindowSpoofing(page) {
 
 (async () => {
   const { browser, flavor } = await launchBrowser();
-  console.log('[puppeteer] launched ' + flavor + ' (headless new)');
+  log('[puppeteer] launched ' + flavor + ' (headless new)');
   const page = await browser.newPage();
   await installTouchAndWindowSpoofing(page);
 
@@ -299,7 +300,7 @@ function installTouchAndWindowSpoofing(page) {
     try {
       body = await res.text();
     } catch (err) {
-      console.log('[puppeteer] failed to read m3u8 body for ' + url + ': ' + err.message);
+      log('[puppeteer] failed to read m3u8 body for ' + url + ': ' + err.message);
     }
 
     const hasExtinf = body && body.includes('#EXTINF');
@@ -315,7 +316,7 @@ function installTouchAndWindowSpoofing(page) {
 
     if (!captured || hasExtinf) {
       captured = { url: finalUrl, headers, hasExtinf };
-      console.log('[puppeteer] captured .m3u8 (' + reason + '): ' + finalUrl);
+      log('[puppeteer] captured .m3u8 (' + reason + '): ' + finalUrl);
       if (resolveCapture) resolveCapture();
     }
   }
@@ -326,9 +327,9 @@ function installTouchAndWindowSpoofing(page) {
   });
 
   try {
-    console.log('[puppeteer] navigating to ' + embedURL);
+    log('[puppeteer] navigating to ' + embedURL);
     await page.goto(embedURL, { waitUntil: 'networkidle2', timeout: timeoutMs });
-    console.log('[puppeteer] primary navigation reached networkidle2');
+    log('[puppeteer] primary navigation reached networkidle2');
   } catch (err) {
     console.error('[puppeteer] navigation warning: ' + err.message);
   }
@@ -339,7 +340,7 @@ function installTouchAndWindowSpoofing(page) {
   ]);
 
   if (!captured) {
-    console.log('[puppeteer] no .m3u8 request observed, scanning DOM for fallback');
+    log('[puppeteer] no .m3u8 request observed, scanning DOM for fallback');
     const candidate = await page.evaluate(() => {
       try {
         const video = document.querySelector('video');
@@ -363,7 +364,7 @@ function installTouchAndWindowSpoofing(page) {
   if (captured) {
     // Enrich headers with cookies and referer if missing.
     const cookies = await page.cookies();
-    console.log('[puppeteer] collected ' + cookies.length + ' cookies during session');
+    log('[puppeteer] collected ' + cookies.length + ' cookies during session');
     if (cookies && cookies.length > 0) {
       const cookieHeader = cookies.map(c => c.name + '=' + c.value).join('; ');
       if (!captured.headers) captured.headers = {};
